@@ -1,0 +1,21 @@
+name: Kabuzidou Morning Report
+
+on:
+  schedule:
+    # 0 23 * * 0-4 (UTC) = 平日 8:00 JST（日本時間は UTC+9 のため前日23時UTC起点）
+    - cron: "0 23 * * 0-4"
+  workflow_dispatch: {}
+
+jobs:
+  morning-report:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run morning report
+        shell: powershell
+        env:
+          KABU_SMTP_USER: ${{ secrets.KABU_SMTP_USER }}
+          KABU_SMTP_PASS: ${{ secrets.KABU_SMTP_PASS }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: .\scripts\Get-MorningReport.ps1

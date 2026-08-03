@@ -1,0 +1,12 @@
+﻿{
+    "date":  "2026-08-02",
+    "alerted":  {
+                    "IsFixedSize":  true,
+                    "IsSynchronized":  true,
+                    "Count":  true,
+                    "Keys":  true,
+                    "Values":  true,
+                    "IsReadOnly":  true,
+                    "SyncRoot":  true
+                }
+}

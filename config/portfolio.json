@@ -1,0 +1,19 @@
+{
+  "_note": "個別株は ticker を証券コード+.T で指定 (assetType: stock、省略時のデフォルト)。投資信託は assetType: fund とし、連動する指数の proxyTicker と fxAdjusted:true (円建て・為替の影響を受ける場合) を指定する。fundの場合、実際の基準価額そのものではなく、連動指数+為替から推定した参考値になる。",
+  "holdings": [
+    {
+      "assetType": "fund",
+      "name": "オルカン(eMAXIS Slim 全世界株式)",
+      "proxyTicker": "ACWI",
+      "proxyName": "MSCI ACWI(全世界株式指数)",
+      "fxAdjusted": true
+    },
+    {
+      "assetType": "fund",
+      "name": "S&P500(eMAXIS Slim 米国株式)",
+      "proxyTicker": "^GSPC",
+      "proxyName": "S&P500指数",
+      "fxAdjusted": true
+    }
+  ]
+}
