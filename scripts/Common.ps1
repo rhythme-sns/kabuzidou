@@ -8,6 +8,13 @@ $script:LogDir    = Join-Path $RootDir "logs"
 $script:CredPath  = Join-Path $env:LOCALAPPDATA "kabuzidou\smtp_cred.xml"
 $script:AnthropicKeyPath = Join-Path $env:LOCALAPPDATA "kabuzidou\anthropic_key.xml"
 
+function Get-KabuJstNow {
+    # GitHub Actions等CI環境のランナーは常にUTCで動作するため、Get-Date（ローカル時刻）を
+    # そのまま使うとローカルPC(JST)実行時とCI実行時でレポート日付・アラート時刻が9時間ズレる。
+    # UTC基準からJST(UTC+9)へ明示的に変換することで、実行環境によらず時刻表示を一致させる。
+    return [DateTime]::UtcNow.AddHours(9)
+}
+
 function Write-KabuLog {
     param(
         [Parameter(Mandatory)][string]$Message,
@@ -15,10 +22,30 @@ function Write-KabuLog {
         [ValidateSet("INFO","WARN","ERROR")][string]$Level = "INFO"
     )
     if (-not (Test-Path $script:LogDir)) { New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null }
-    $line = "{0} [{1}] [{2}] {3}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Source, $Message
-    $logFile = Join-Path $script:LogDir ("{0}.log" -f (Get-Date -Format "yyyy-MM"))
+    $jstNow = Get-KabuJstNow
+    $line = "{0} [{1}] [{2}] {3}" -f ($jstNow.ToString("yyyy-MM-dd HH:mm:ss")), $Level, $Source, $Message
+    $logFile = Join-Path $script:LogDir ("{0}.log" -f ($jstNow.ToString("yyyy-MM")))
     Add-Content -Path $logFile -Value $line -Encoding UTF8
     Write-Host $line
+}
+
+function New-KabuAIItem {
+    # 朝レポート/急変アラートで共用するAI問い合わせアイテムのファクトリ。
+    # idはItemsリスト内で一意であればよいため、追加前のCountをそのまま採番に使う。
+    param(
+        [Parameter(Mandatory)][System.Collections.Generic.List[object]]$Items,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Context,
+        [double]$ChangePct = 0,
+        [double]$TrendPct5d = 0,
+        [bool]$IsBuyCandidate = $false
+    )
+    $id = "item$($Items.Count + 1)"
+    $Items.Add([PSCustomObject]@{
+        id = $id; name = $Name; context = $Context
+        changePct = $ChangePct; trendPct5d = $TrendPct5d; isBuyCandidate = $IsBuyCandidate
+    })
+    return $id
 }
 
 function Get-KabuConfig {

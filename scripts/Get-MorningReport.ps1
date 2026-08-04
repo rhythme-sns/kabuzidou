@@ -11,19 +11,8 @@ $portfolio = (Get-KabuConfig -Name "portfolio").holdings
 $settings  = Get-KabuConfig -Name "settings"
 
 # AI(Claude API)への一括問い合わせ用にアイテムを集めておく。実際の呼び出しはレポートの全セクションを
-# 組み立てた後に1回だけ行う（コストを抑えるため）。
+# 組み立てた後に1回だけ行う（コストを抑えるため）。New-KabuAIItem は Common.ps1 で共通定義（Watch-News.ps1 と共用）。
 $aiItems = New-Object System.Collections.Generic.List[object]
-$script:aiIdCounter = 0
-function New-KabuAIItem {
-    param([string]$Name, [string]$Context, [double]$ChangePct, [double]$TrendPct5d, [bool]$IsBuyCandidate = $false)
-    $script:aiIdCounter++
-    $id = "item$($script:aiIdCounter)"
-    $aiItems.Add([PSCustomObject]@{
-        id = $id; name = $Name; context = $Context
-        changePct = $ChangePct; trendPct5d = $TrendPct5d; isBuyCandidate = $IsBuyCandidate
-    })
-    return $id
-}
 
 function Format-Pct($v) {
     if ($null -eq $v) { return "-" }
@@ -100,7 +89,7 @@ function Add-KabuReason($rows, [bool]$IsBuyCandidate = $false) {
         $r | Add-Member -MemberType NoteProperty -Name "Reason" -Value $reasonText -Force
         $r | Add-Member -MemberType NoteProperty -Name "ReasonLink" -Value $(if ($newsReason) { $newsReason.Link } else { $null }) -Force
 
-        $aiId = New-KabuAIItem -Name $r.Name -Context $reasonText -ChangePct $r.ChangePct -TrendPct5d $r.TrendPct5d -IsBuyCandidate $IsBuyCandidate
+        $aiId = New-KabuAIItem -Items $aiItems -Name $r.Name -Context $reasonText -ChangePct $r.ChangePct -TrendPct5d $r.TrendPct5d -IsBuyCandidate $IsBuyCandidate
         $r | Add-Member -MemberType NoteProperty -Name "AIId" -Value $aiId -Force
     }
     return $rows
@@ -179,7 +168,7 @@ if ($portfolio -and $portfolio.Count -gt 0) {
             $newsReason = Get-KabuNewsReasonText -Query $h.proxyName
             Start-Sleep -Milliseconds 300
             if ($newsReason) { $view += "。$($newsReason.Text) <a href='$($newsReason.Link)' style='font-size:12px;'>[記事]</a>" }
-            $aiId = New-KabuAIItem -Name $h.name -Context $view -ChangePct $estPct -TrendPct5d $estTrend
+            $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $estPct -TrendPct5d $estTrend
             [PSCustomObject]@{ Name = $h.name; Ticker = $h.proxyName; LastClose = "(推定)"; ChangePct = $estPct; TrendPct5d = $estTrend; VolumeRatio = "-"; View = $view; AIId = $aiId }
         } else {
             $c = Get-YahooChart -Ticker $h.ticker -Range "1mo" -Interval "1d"
@@ -195,7 +184,7 @@ if ($portfolio -and $portfolio.Count -gt 0) {
             $newsReason = Get-KabuNewsReasonText -Query $h.name
             Start-Sleep -Milliseconds 300
             if ($newsReason) { $view += "。$($newsReason.Text) <a href='$($newsReason.Link)' style='font-size:12px;'>[記事]</a>" }
-            $aiId = New-KabuAIItem -Name $h.name -Context $view -ChangePct $m.ChangePct -TrendPct5d $m.TrendPct5d
+            $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $m.ChangePct -TrendPct5d $m.TrendPct5d
             [PSCustomObject]@{ Name = $h.name; Ticker = $h.ticker; LastClose = $m.LastClose; ChangePct = $m.ChangePct; TrendPct5d = $m.TrendPct5d; VolumeRatio = $m.VolumeRatio; View = $view; AIId = $aiId }
         }
     }
@@ -209,6 +198,7 @@ if ($portfolio -and $portfolio.Count -gt 0) {
 # 失敗（未設定・ネットワークエラー・レート制限など）してもレポート全体は止めず、
 # ルールベースの内容のみで送信する。
 $aiInsights = @{}
+$aiInsightsFailed = $false
 if ($settings.enableAiInsights -and $aiItems.Count -gt 0) {
     try {
         $aiInsights = Get-KabuAIInsights -Items $aiItems
@@ -216,6 +206,7 @@ if ($settings.enableAiInsights -and $aiItems.Count -gt 0) {
     } catch {
         Write-KabuLog "AI要約生成失敗のためルールベースのみで続行: $($_.Exception.Message)" -Level "WARN"
         $aiInsights = @{}
+        $aiInsightsFailed = $true
     }
 }
 
@@ -234,11 +225,18 @@ if ($portfolio -and $portfolio.Count -gt 0) {
     $portfolioHtml = "<p style='color:#888;'>保有株が config\portfolio.json に登録されていません。編集すると保有株の見立てが表示されます。</p>"
 }
 
-$today = Get-Date -Format "yyyy-MM-dd (ddd)"
+$today = (Get-KabuJstNow).ToString("yyyy-MM-dd (ddd)")
+
+$aiFailedBanner = if ($aiInsightsFailed) {
+    "<p style='background:#f8d7da;padding:8px;border-radius:4px;font-size:13px;'>" +
+    "⚠ AI要約・信頼度・買いおすすめ度の生成に失敗したため、本日はチャート根拠とニュース見出しのみの簡易版です（原因はログ参照。GitHub Actions実行の場合はANTHROPIC_API_KEYのSecrets設定をご確認ください）。" +
+    "</p>"
+} else { "" }
 
 $body = @"
 <div style='font-family:sans-serif;'>
 <h2>kabuzidou 朝レポート $today</h2>
+$aiFailedBanner
 <p style='background:#fff3cd;padding:8px;border-radius:4px;font-size:13px;'>
 ※本レポートは過去の値動き・出来高・ニュース見出しから機械的/AIが算出した参考情報であり、将来の株価上昇/下落を保証するものではありません。
 「信頼度」「おすすめ度」も統計的な的中率ではなく、材料がどれだけ揃っているかの目安に過ぎません。投資判断はご自身の責任で行ってください。
