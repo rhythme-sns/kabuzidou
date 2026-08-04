@@ -1,12 +1,12 @@
 ﻿{
     "date":  "2026-08-04",
     "alerted":  {
-                    "IsFixedSize":  true,
-                    "Count":  true,
-                    "IsSynchronized":  true,
-                    "IsReadOnly":  true,
-                    "Keys":  true,
                     "Values":  true,
+                    "IsFixedSize":  true,
+                    "IsSynchronized":  true,
+                    "Count":  true,
+                    "Keys":  true,
+                    "IsReadOnly":  true,
                     "SyncRoot":  true
                 }
 }
