@@ -166,9 +166,12 @@ $alerts = foreach ($p in $pendingAlerts) {
 }
 
 # --- 送信 ---
+# newsWatchAlertsEnabled: false の間は検知ロジック・状態保存はすべて通常通り動かした上で、
+# メール送信のみをスキップする（機能自体は温存し、再度trueに戻せばそのまま動く）。
 if ($alerts.Count -gt 0) {
-    $jstNow = Get-KabuJstNow
-    $body = @"
+    if ($settings.newsWatchAlertsEnabled) {
+        $jstNow = Get-KabuJstNow
+        $body = @"
 <div style='font-family:sans-serif;'>
 <h2>kabuzidou 急変アラート $($jstNow.ToString("yyyy-MM-dd HH:mm"))</h2>
 <p style='background:#f8d7da;padding:8px;border-radius:4px;font-size:13px;'>
@@ -179,8 +182,11 @@ $($alerts -join "`n")
 </ul>
 </div>
 "@
-    Send-KabuMail -Subject "【株alert】急な変動/ニュースを検知 $($jstNow.ToString('HH:mm'))" -BodyHtml $body
-    Write-KabuLog "アラート送信: $($alerts.Count)件"
+        Send-KabuMail -Subject "【株alert】急な変動/ニュースを検知 $($jstNow.ToString('HH:mm'))" -BodyHtml $body
+        Write-KabuLog "アラート送信: $($alerts.Count)件"
+    } else {
+        Write-KabuLog "アラート対象$($alerts.Count)件を検知したが、newsWatchAlertsEnabled=falseのため送信スキップ"
+    }
 } else {
     Write-KabuLog "アラート対象なし"
 }

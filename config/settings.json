@@ -7,5 +7,7 @@
   "marketOpenLocal": "09:00",
   "marketCloseLocal": "15:00",
   "enableAiInsights": true,
-  "anthropicModel": "claude-haiku-4-5"
+  "anthropicModel": "claude-haiku-4-5",
+  "newsWatchAlertsEnabled": false,
+  "eveningReviewEnabled": true
 }

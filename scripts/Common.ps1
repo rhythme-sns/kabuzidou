@@ -210,82 +210,32 @@ function Get-KabuAnthropicApiKey {
     }
 }
 
-function Get-KabuAIInsights {
-    # 銘柄ごとの「チャート根拠＋ニュース見出し」をClaude APIに渡し、
-    #   ・要約（ニュース内容の要約込み）
-    #   ・変動幅の目安（例: +1〜3%程度）
-    #   ・信頼度%（統計的な的中率ではなく、材料がどれだけ揃っているかの目安であることを明記）
-    #   ・買い目候補のみ: おすすめ度(0-100)と具体的な買い目理由
-    # をまとめて1回のAPI呼び出しで生成する（コストを抑えるためバッチ処理）。
-    # 失敗しても例外をthrowし、呼び出し側でルールベースのみにフォールバックする。
-    param([Parameter(Mandatory)][array]$Items)
-
-    if ($Items.Count -eq 0) { return @{} }
+function Invoke-KabuAnthropicMessages {
+    # Claude API (Messages API, json_schema出力) への呼び出しを行う共通関数。
+    # Get-KabuAIInsights と Get-KabuEveningReview で共用する。
+    # 失敗時は例外をthrowする（呼び出し側でルールベースへのフォールバックを判断させるため）。
+    param(
+        [Parameter(Mandatory)][string]$SystemPrompt,
+        [Parameter(Mandatory)][string]$UserContent,
+        [Parameter(Mandatory)][hashtable]$Schema,
+        [int]$MaxTokens = 4096
+    )
 
     $settings = Get-KabuConfig -Name "settings"
     $model = if ($settings.anthropicModel) { $settings.anthropicModel } else { "claude-haiku-4-5" }
     $apiKey = Get-KabuAnthropicApiKey
 
-    $itemsForPrompt = $Items | ForEach-Object {
-        [PSCustomObject]@{
-            id             = $_.id
-            name           = $_.name
-            context        = $_.context
-            changePct      = $_.changePct
-            trendPct5d     = $_.trendPct5d
-            isBuyCandidate = [bool]$_.isBuyCandidate
-        }
-    }
-    $itemsJson = $itemsForPrompt | ConvertTo-Json -Depth 5 -Compress
-
-    $systemPrompt = @"
-あなたは日本の個人投資家向けに、株価情報を分かりやすく要約するアシスタントです。
-与えられた各銘柄の「チャートの動き」と「関連ニュース見出し」から、以下を日本語で生成してください。
-
-- summary: ニュース内容を要約し、チャートの動きと合わせて「なぜそう見えるか」を1〜2文で説明。ニュースが無ければチャートのみから。
-- expectedMove: 本日の値動きの大まかな目安（例: 「+1〜3%程度の上昇余地」「-2%前後の下落リスク」）。過去の値動き幅から導く参考値であり、断定はしないこと。
-- confidencePct: 0〜100の整数。これは統計的な的中率ではなく、「材料（ニュース・出来高・トレンドの一致度）がどれだけ揃っているか」を示す目安。材料が薄い場合は30〜50、複数の材料が一致する場合でも70を超えることは稀とし、過信させる数値にしないこと。
-- recommendationScore: isBuyCandidateがtrueの銘柄のみ0〜100の整数（それ以外は0でよい）。中期上昇トレンド中の押し目としての魅力度の目安。
-- buyRationale: isBuyCandidateがtrueの銘柄のみ、具体的で分かりやすい買い目理由を1〜2文（それ以外は空文字でよい）。
-
-投資助言ではなく参考情報の提示に徹し、誇張した表現は避けてください。
-"@
-
-    $schema = @{
-        type = "object"
-        properties = @{
-            items = @{
-                type = "array"
-                items = @{
-                    type = "object"
-                    properties = @{
-                        id                   = @{ type = "string" }
-                        summary              = @{ type = "string" }
-                        expectedMove         = @{ type = "string" }
-                        confidencePct        = @{ type = "integer" }
-                        recommendationScore  = @{ type = "integer" }
-                        buyRationale         = @{ type = "string" }
-                    }
-                    required = @("id","summary","expectedMove","confidencePct","recommendationScore","buyRationale")
-                    additionalProperties = $false
-                }
-            }
-        }
-        required = @("items")
-        additionalProperties = $false
-    }
-
     $bodyJson = @{
         model    = $model
-        max_tokens = 4096
-        system   = $systemPrompt
+        max_tokens = $MaxTokens
+        system   = $SystemPrompt
         messages = @(
-            @{ role = "user"; content = "次の銘柄一覧について、指示された形式で分析してください:`n$itemsJson" }
+            @{ role = "user"; content = $UserContent }
         )
         output_config = @{
             format = @{
                 type   = "json_schema"
-                schema = $schema
+                schema = $Schema
             }
         }
     } | ConvertTo-Json -Depth 10
@@ -318,19 +268,148 @@ function Get-KabuAIInsights {
     $resp = [System.Text.Encoding]::UTF8.GetString($rawBytes) | ConvertFrom-Json
 
     if ($resp.stop_reason -eq "refusal") {
-        Write-KabuLog "Claude APIが応答を拒否しました（AI要約なしで続行）" -Level "WARN"
-        return @{}
+        Write-KabuLog "Claude APIが応答を拒否しました" -Level "WARN"
+        return $null
     }
 
     $textBlock = $resp.content | Where-Object { $_.type -eq "text" } | Select-Object -First 1
-    if (-not $textBlock) { return @{} }
-    $parsed = $textBlock.text | ConvertFrom-Json
+    if (-not $textBlock) { return $null }
+    return $textBlock.text | ConvertFrom-Json
+}
+
+function Get-KabuAIInsights {
+    # 銘柄ごとの「チャート根拠＋ニュース見出し」をClaude APIに渡し、
+    #   ・要約（ニュース内容の要約込み）
+    #   ・変動幅の目安（例: +1〜3%程度）
+    #   ・信頼度%（統計的な的中率ではなく、材料がどれだけ揃っているかの目安であることを明記）
+    #   ・買い目候補のみ: おすすめ度(0-100)と具体的な買い目理由
+    # をまとめて1回のAPI呼び出しで生成する（コストを抑えるためバッチ処理）。
+    # 失敗しても例外をthrowし、呼び出し側でルールベースのみにフォールバックする。
+    param(
+        [Parameter(Mandatory)][array]$Items,
+        [string]$LessonsContext = ""
+    )
+
+    if ($Items.Count -eq 0) { return @{} }
+
+    $itemsForPrompt = $Items | ForEach-Object {
+        [PSCustomObject]@{
+            id             = $_.id
+            name           = $_.name
+            context        = $_.context
+            changePct      = $_.changePct
+            trendPct5d     = $_.trendPct5d
+            isBuyCandidate = [bool]$_.isBuyCandidate
+        }
+    }
+    $itemsJson = $itemsForPrompt | ConvertTo-Json -Depth 5 -Compress
+
+    $lessonsBlock = if ($LessonsContext) {
+        "`n`n【過去の的中率検証から得られた注意点（直近の答え合わせ結果より）】`n$LessonsContext`nこれらの傾向を踏まえて、confidencePctやexpectedMoveの見積もりを必要に応じて調整してください。"
+    } else { "" }
+
+    $systemPrompt = @"
+あなたは日本の個人投資家向けに、株価情報を分かりやすく要約するアシスタントです。
+与えられた各銘柄の「チャートの動き」と「関連ニュース見出し」から、以下を日本語で生成してください。
+
+- summary: ニュース内容を要約し、チャートの動きと合わせて「なぜそう見えるか」を1〜2文で説明。ニュースが無ければチャートのみから。
+- expectedMove: 本日の値動きの大まかな目安（例: 「+1〜3%程度の上昇余地」「-2%前後の下落リスク」）。過去の値動き幅から導く参考値であり、断定はしないこと。
+- confidencePct: 0〜100の整数。これは統計的な的中率ではなく、「材料（ニュース・出来高・トレンドの一致度）がどれだけ揃っているか」を示す目安。材料が薄い場合は30〜50、複数の材料が一致する場合でも70を超えることは稀とし、過信させる数値にしないこと。
+- recommendationScore: isBuyCandidateがtrueの銘柄のみ0〜100の整数（それ以外は0でよい）。中期上昇トレンド中の押し目としての魅力度の目安。
+- buyRationale: isBuyCandidateがtrueの銘柄のみ、具体的で分かりやすい買い目理由を1〜2文（それ以外は空文字でよい）。
+
+投資助言ではなく参考情報の提示に徹し、誇張した表現は避けてください。$lessonsBlock
+"@
+
+    $schema = @{
+        type = "object"
+        properties = @{
+            items = @{
+                type = "array"
+                items = @{
+                    type = "object"
+                    properties = @{
+                        id                   = @{ type = "string" }
+                        summary              = @{ type = "string" }
+                        expectedMove         = @{ type = "string" }
+                        confidencePct        = @{ type = "integer" }
+                        recommendationScore  = @{ type = "integer" }
+                        buyRationale         = @{ type = "string" }
+                    }
+                    required = @("id","summary","expectedMove","confidencePct","recommendationScore","buyRationale")
+                    additionalProperties = $false
+                }
+            }
+        }
+        required = @("items")
+        additionalProperties = $false
+    }
+
+    $parsed = Invoke-KabuAnthropicMessages -SystemPrompt $systemPrompt `
+        -UserContent "次の銘柄一覧について、指示された形式で分析してください:`n$itemsJson" -Schema $schema
+    if (-not $parsed) { return @{} }
 
     $result = @{}
     foreach ($item in $parsed.items) {
         $result[$item.id] = $item
     }
     return $result
+}
+
+function Save-KabuPredictionSnapshot {
+    # 朝レポートで提示した予測（候補銘柄・AIの変動目安/信頼度・保有株の見立て）を
+    # 日付単位でstate配下に保存する。夕方の答え合わせ(Get-EveningReview.ps1)で参照する。
+    param(
+        [Parameter(Mandatory)][array]$Items,
+        [Parameter(Mandatory)][string]$Date
+    )
+    $dir = Join-Path $script:StateDir "predictions"
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $path = Join-Path $dir "$Date.json"
+    [PSCustomObject]@{ date = $Date; items = $Items } | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding UTF8
+}
+
+function Get-KabuPredictionSnapshot {
+    # 指定日の朝レポート予測スナップショットを読み込む。存在しなければ$nullを返す。
+    param([Parameter(Mandatory)][string]$Date)
+    $path = Join-Path $script:StateDir "predictions\$Date.json"
+    if (-not (Test-Path $path)) { return $null }
+    return Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
+function Get-KabuLessons {
+    # 過去の答え合わせ分析（教訓）の履歴を読み込む。存在しなければ空配列を返す。
+    $path = Join-Path $script:StateDir "lessons.json"
+    if (-not (Test-Path $path)) { return @() }
+    $data = Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    return @($data)
+}
+
+function Add-KabuLesson {
+    # 答え合わせ分析（教訓）を1件追記し、直近$KeepLast件のみ保持する（無限に肥大化させないため）。
+    param(
+        [Parameter(Mandatory)]$Lesson,
+        [int]$KeepLast = 14
+    )
+    $path = Join-Path $script:StateDir "lessons.json"
+    $existing = Get-KabuLessons
+    $updated = @($existing) + @($Lesson)
+    if ($updated.Count -gt $KeepLast) {
+        $updated = $updated[($updated.Count - $KeepLast)..($updated.Count - 1)]
+    }
+    $updated | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding UTF8
+}
+
+function Get-KabuLessonsContext {
+    # 直近の教訓をAIプロンプトに埋め込みやすいテキストブロックに整形する。
+    param([int]$MaxLessons = 5)
+    $lessons = Get-KabuLessons
+    if ($lessons.Count -eq 0) { return "" }
+    $recent = $lessons | Select-Object -Last $MaxLessons
+    $lines = foreach ($l in $recent) {
+        "- $($l.date): $($l.calibrationNotes)"
+    }
+    return ($lines -join "`n")
 }
 
 function Get-KabuMomentum {

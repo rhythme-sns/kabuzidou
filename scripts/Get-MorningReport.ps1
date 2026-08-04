@@ -197,17 +197,68 @@ if ($portfolio -and $portfolio.Count -gt 0) {
 # 全セクション分をまとめて1回のAPI呼び出しにすることでコストを抑える。
 # 失敗（未設定・ネットワークエラー・レート制限など）してもレポート全体は止めず、
 # ルールベースの内容のみで送信する。
+# lessonsContext: 過去の夕方answer合わせ(Get-EveningReview.ps1)で蓄積した的中率検証の教訓を
+# プロンプトに追加し、confidencePct等の見積もり精度を継続的に改善する。
+$lessonsContext = Get-KabuLessonsContext
 $aiInsights = @{}
 $aiInsightsFailed = $false
 if ($settings.enableAiInsights -and $aiItems.Count -gt 0) {
     try {
-        $aiInsights = Get-KabuAIInsights -Items $aiItems
+        $aiInsights = Get-KabuAIInsights -Items $aiItems -LessonsContext $lessonsContext
         Write-KabuLog "AI要約生成成功: $($aiInsights.Count)件"
     } catch {
         Write-KabuLog "AI要約生成失敗のためルールベースのみで続行: $($_.Exception.Message)" -Level "WARN"
         $aiInsights = @{}
         $aiInsightsFailed = $true
     }
+}
+
+# --- 予測スナップショットの保存（夕方の答え合わせ用） ---
+# 本日終値が確定しているJP株（.T銘柄）のみが同日17:13の答え合わせ対象になるため、
+# ファンド保有(proxy参照、米国市場基準で日本時間夕方時点では未確定)は対象から除く。
+function Get-KabuPredictionItem($r, [string]$Section, [bool]$IsBuyCandidate = $false) {
+    $ai = if ($r.AIId -and $aiInsights.ContainsKey($r.AIId)) { $aiInsights[$r.AIId] } else { $null }
+    [PSCustomObject]@{
+        section              = $Section
+        name                 = $r.Name
+        ticker               = $r.Ticker
+        baseClose            = $r.LastClose
+        chartChangePct       = $r.ChangePct
+        trendPct5d           = $r.TrendPct5d
+        isBuyCandidate       = $IsBuyCandidate
+        aiSummary            = if ($ai) { $ai.summary } else { "" }
+        aiExpectedMove       = if ($ai) { $ai.expectedMove } else { "" }
+        aiConfidencePct      = if ($ai) { $ai.confidencePct } else { $null }
+        aiRecommendationScore = if ($ai) { $ai.recommendationScore } else { $null }
+    }
+}
+$predictionItems = New-Object System.Collections.Generic.List[object]
+foreach ($r in $grRisers)   { $predictionItems.Add((Get-KabuPredictionItem $r "riser")) }
+foreach ($r in $grFallers)  { $predictionItems.Add((Get-KabuPredictionItem $r "faller")) }
+foreach ($r in $grBreakout) { $predictionItems.Add((Get-KabuPredictionItem $r "breakout" $true)) }
+foreach ($r in $grPullback) { $predictionItems.Add((Get-KabuPredictionItem $r "pullback" $true)) }
+foreach ($r in $portfolioRows) {
+    if ($r.Ticker -notmatch '\.T$') { continue }
+    $ai = if ($r.AIId -and $aiInsights.ContainsKey($r.AIId)) { $aiInsights[$r.AIId] } else { $null }
+    $predictionItems.Add([PSCustomObject]@{
+        section              = "portfolio"
+        name                 = $r.Name
+        ticker               = $r.Ticker
+        baseClose            = $r.LastClose
+        chartChangePct       = $r.ChangePct
+        trendPct5d           = $r.TrendPct5d
+        isBuyCandidate       = $false
+        view                 = $r.View
+        aiSummary            = if ($ai) { $ai.summary } else { "" }
+        aiExpectedMove       = if ($ai) { $ai.expectedMove } else { "" }
+        aiConfidencePct      = if ($ai) { $ai.confidencePct } else { $null }
+        aiRecommendationScore = $null
+    })
+}
+$todayIso = (Get-KabuJstNow).ToString("yyyy-MM-dd")
+if ($predictionItems.Count -gt 0) {
+    Save-KabuPredictionSnapshot -Items $predictionItems -Date $todayIso
+    Write-KabuLog "予測スナップショット保存: $($predictionItems.Count)件 ($todayIso)"
 }
 
 if ($portfolio -and $portfolio.Count -gt 0) {
