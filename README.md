@@ -18,8 +18,13 @@
 - データ取得: Yahoo Finance の非公式チャートAPI（APIキー不要、日本株は `7203.T` のような証券コード指定）
 - ニュース: Google News RSS（キーワード検索、APIキー不要）
 - 配信: Gmail の SMTP（アプリパスワード使用）
-- 実行: Windows タスクスケジューラ（PCの電源が入っている必要があります）
-- 認証情報: DPAPIで暗号化し `%LOCALAPPDATA%\kabuzidou\smtp_cred.xml` に保存（このPC・このWindowsアカウントでしか復号不可）
+- 実行: GitHub Actions（`.github/workflows/`）。PCの電源に関係なく実行されるのが利点だが、
+  `schedule`(cron)トリガーはベストエフォートで数時間単位の遅延が起きうるため使用していない。
+  代わりに外部cronサービスからGitHub APIの `workflow_dispatch` を正確なJST時刻に呼び出す
+  （詳細は下記「メール配信スケジュール」）。ローカルPCでの実行用に Windows タスクスケジューラ
+  版（`Register-Tasks.ps1`）も用意してあるが、現在の主経路はGitHub Actions。
+- 認証情報: GitHub Actions実行時はリポジトリのSecrets（`KABU_SMTP_USER`/`KABU_SMTP_PASS`/`ANTHROPIC_API_KEY`）。
+  ローカル実行時はDPAPIで暗号化し `%LOCALAPPDATA%\kabuzidou\smtp_cred.xml` に保存（このPC・このWindowsアカウントでしか復号不可）
 
 ## 初回セットアップ（3ステップ）
 
@@ -65,6 +70,57 @@ cd "C:\Users\reon2\OneDrive\デスクトップ\kabuzidou\scripts"
 ```
 
 管理者権限を求められて失敗する場合は、PowerShellを「管理者として実行」してから再度実行してください。
+
+## メール配信スケジュール（正確な時刻に届ける設定）
+
+GitHub Actionsの`schedule`(cron)トリガーは公式に「ベストエフォート」とされており、実測でも
+朝レポート・夕方レビューとも10時間以上遅延することが確認されています（2026-08-03/04）。
+そのため`schedule`は使わず、外部の無料cronサービスから正確なJST時刻にGitHub APIを叩いて
+ワークフローを起動する方式にしています。以下は [cron-job.org](https://cron-job.org) を使う手順です
+（他の外部cron/監視サービスでも同じ要領で設定可能）。
+
+### 1. GitHub Personal Access Token（PAT）を発行する
+
+1. https://github.com/settings/personal-access-tokens/new を開く
+2. Repository access → "Only select repositories" → `rhythme-sns/kabuzidou` を選択
+3. Permissions → Repository permissions → **Actions: Read and write** に設定
+4. Generate token → 表示されたトークン（`github_pat_...`）をコピーして保存
+   （このトークンはワークフローを起動できる権限を持つ機密情報です。cron-job.org以外には貼らないでください）
+
+### 2. cron-job.org に無料アカウント登録する
+
+https://cron-job.org/en/signup/ でメールアドレス登録するだけでOK（無料枠で十分）。
+
+### 3. 朝レポート用のジョブを作成する
+
+「Create cronjob」から:
+
+- **Title**: `kabuzidou-morning-report`
+- **URL**: `https://api.github.com/repos/rhythme-sns/kabuzidou/actions/workflows/morning-report.yml/dispatches`
+- **Request method**: `POST`
+- **Common → Timezone**: `Asia/Tokyo`
+- **Schedule**: 毎週 月〜金曜日、`08:00`
+- **Advanced → Headers**（Key: Value形式で追加）:
+  - `Authorization`: `Bearer <手順1で発行したトークン>`
+  - `Accept`: `application/vnd.github+json`
+  - `X-GitHub-Api-Version`: `2022-11-28`
+  - `Content-Type`: `application/json`
+- **Advanced → Request body**: `{"ref":"master"}`
+
+### 4. 夕方レビュー用のジョブを作成する
+
+同様にもう1つ作成:
+
+- **Title**: `kabuzidou-evening-review`
+- **URL**: `https://api.github.com/repos/rhythme-sns/kabuzidou/actions/workflows/evening-review.yml/dispatches`
+- それ以外（Headers・body・Request method）は手順3と同じ
+- **Schedule**: 毎週 月〜金曜日、`17:13`（Timezoneは`Asia/Tokyo`）
+
+### 5. 動作確認
+
+cron-job.orgの各ジョブ画面から「Test run」を実行し、GitHubリポジトリの Actions タブで
+ワークフローが起動してメールが届くか確認してください。以後は登録した時刻ちょうどに
+GitHub API経由で起動されるため、GitHub Actions自体の`schedule`遅延の影響を受けません。
 
 ## 動作確認
 

@@ -1,9 +1,11 @@
 name: Kabuzidou Morning Report
 
 on:
-  schedule:
-    # 0 23 * * 0-4 (UTC) = 平日 8:00 JST（日本時間は UTC+9 のため前日23時UTC起点）
-    - cron: "0 23 * * 0-4"
+  # GitHub Actionsのschedule(cron)はベストエフォートで、実測で10時間以上遅延することが
+  # あるため使用しない(2026-08-03/04に平日朝レポート・夕方レビューとも約10.5時間遅延を確認済み)。
+  # 代わりに外部cronサービス(cron-job.org等)からGitHub REST APIの
+  # workflow_dispatch エンドポイントをJST基準の正確な時刻に叩く運用にする。
+  # 手順は README.md の「メール配信スケジュール」を参照。
   workflow_dispatch: {}
 
 permissions:
