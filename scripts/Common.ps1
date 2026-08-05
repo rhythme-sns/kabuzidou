@@ -41,12 +41,13 @@ function New-KabuAIItem {
         [Parameter(Mandatory)][string]$Context,
         [double]$ChangePct = 0,
         [double]$TrendPct5d = 0,
+        [Nullable[double]]$RangePct = $null,
         [bool]$IsBuyCandidate = $false
     )
     $id = "item$($Items.Count + 1)"
     $Items.Add([PSCustomObject]@{
         id = $id; name = $Name; context = $Context
-        changePct = $ChangePct; trendPct5d = $TrendPct5d; isBuyCandidate = $IsBuyCandidate
+        changePct = $ChangePct; trendPct5d = $TrendPct5d; rangePct = $RangePct; isBuyCandidate = $IsBuyCandidate
     })
     return $id
 }
@@ -182,6 +183,15 @@ function Get-KabuChartReasonText {
 
     if ($Momentum.VolumeRatio -ge 2)      { $clauses.Add("出来高が平均の$($Momentum.VolumeRatio)倍に急増") }
 
+    if ($null -ne $Momentum.RangePct) {
+        $clauses.Add("本日の値幅は高値$($Momentum.LastHigh)・安値$($Momentum.LastLow)(値幅$($Momentum.RangePct)%)")
+        if ($Momentum.LastHigh -ne $Momentum.LastLow -and $null -ne $Momentum.LastClose) {
+            $closePos = ($Momentum.LastClose - $Momentum.LastLow) / ($Momentum.LastHigh - $Momentum.LastLow)
+            if ($closePos -ge 0.8)    { $clauses.Add("高値圏で引けており強含み") }
+            elseif ($closePos -le 0.2) { $clauses.Add("安値圏で引けており弱含み") }
+        }
+    }
+
     if ($clauses.Count -eq 0) { $clauses.Add("直近チャートに大きな変化なし") }
     return ($clauses -join "、") + "（チャートより）"
 }
@@ -302,6 +312,7 @@ function Get-KabuAIInsights {
             context        = $_.context
             changePct      = $_.changePct
             trendPct5d     = $_.trendPct5d
+            rangePct       = $_.rangePct
             isBuyCandidate = [bool]$_.isBuyCandidate
         }
     }
@@ -313,10 +324,12 @@ function Get-KabuAIInsights {
 
     $systemPrompt = @"
 あなたは日本の個人投資家向けに、株価情報を分かりやすく要約するアシスタントです。
-与えられた各銘柄の「チャートの動き」と「関連ニュース見出し」から、以下を日本語で生成してください。
+与えられた各銘柄の「チャートの動き（前日比changePct、5日トレンドtrendPct5d、当日の値幅rangePct＝高値と安値の差を終値比%にしたもの）」と
+「関連ニュース見出し」から、以下を日本語で生成してください。
+rangePctが大きい銘柄は値動きが荒く、目安レンジも広めに・信頼度も控えめにするなど、値幅の大小も見積もりに反映してください。
 
-- summary: ニュース内容を要約し、チャートの動きと合わせて「なぜそう見えるか」を1〜2文で説明。ニュースが無ければチャートのみから。
-- expectedMove: 本日の値動きの大まかな目安（例: 「+1〜3%程度の上昇余地」「-2%前後の下落リスク」）。過去の値動き幅から導く参考値であり、断定はしないこと。
+- summary: ニュース内容を要約し、チャートの動き（値幅の大きさも含めて）と合わせて「なぜそう見えるか」を1〜2文で説明。ニュースが無ければチャートのみから。
+- expectedMove: 本日の値動きの大まかな目安（例: 「+1〜3%程度の上昇余地」「-2%前後の下落リスク」）。過去の値動き幅（rangePct）から導く参考値であり、断定はしないこと。
 - confidencePct: 0〜100の整数。これは統計的な的中率ではなく、「材料（ニュース・出来高・トレンドの一致度）がどれだけ揃っているか」を示す目安。材料が薄い場合は30〜50、複数の材料が一致する場合でも70を超えることは稀とし、過信させる数値にしないこと。
 - recommendationScore: isBuyCandidateがtrueの銘柄のみ0〜100の整数（それ以外は0でよい）。中期上昇トレンド中の押し目としての魅力度の目安。
 - buyRationale: isBuyCandidateがtrueの銘柄のみ、具体的で分かりやすい買い目理由を1〜2文（それ以外は空文字でよい）。
@@ -420,9 +433,21 @@ function Get-KabuMomentum {
     # あくまで過去の値動きを要約した「参考情報」であり、将来の値動きを保証するものではない。
     param([Parameter(Mandatory)]$Chart)
 
-    $closes = @($Chart.Close | Where-Object { $_ -ne $null })
-    $volumes = @($Chart.Volume | Where-Object { $_ -ne $null })
-    if ($closes.Count -lt 2) { return $null }
+    $closesRaw = @($Chart.Close)
+    $opensRaw  = @($Chart.Open)
+    $highsRaw  = @($Chart.High)
+    $lowsRaw   = @($Chart.Low)
+    $volumes   = @($Chart.Volume | Where-Object { $_ -ne $null })
+
+    # Open/High/Lowは終値と同じインデックス（同じ日）で揃える必要があるため、
+    # 終値がnullでない日のインデックスを基準に4系列をまとめて抽出する。
+    $validIdx = @(0..($closesRaw.Count - 1) | Where-Object { $null -ne $closesRaw[$_] })
+    if ($validIdx.Count -lt 2) { return $null }
+
+    $closes = @($validIdx | ForEach-Object { $closesRaw[$_] })
+    $opens  = @($validIdx | ForEach-Object { $opensRaw[$_] })
+    $highs  = @($validIdx | ForEach-Object { $highsRaw[$_] })
+    $lows   = @($validIdx | ForEach-Object { $lowsRaw[$_] })
 
     $last      = $closes[-1]
     $prev      = $closes[-2]
@@ -436,11 +461,22 @@ function Get-KabuMomentum {
     $lastVol = if ($volumes.Count -gt 0) { $volumes[-1] } else { 0 }
     $volRatio = if ($avgVol -gt 0) { [math]::Round($lastVol / $avgVol, 2) } else { 0 }
 
+    $lastOpen = $opens[-1]
+    $lastHigh = $highs[-1]
+    $lastLow  = $lows[-1]
+    $rangeAbs = if ($null -ne $lastHigh -and $null -ne $lastLow) { [math]::Round($lastHigh - $lastLow, 2) } else { $null }
+    $rangePct = if ($null -ne $rangeAbs -and $last -ne 0) { [math]::Round(($rangeAbs / $last) * 100, 2) } else { $null }
+
     [PSCustomObject]@{
         Ticker      = $Chart.Ticker
+        LastOpen    = $lastOpen
+        LastHigh    = $lastHigh
+        LastLow     = $lastLow
         LastClose   = $last
         ChangePct   = $changePct
         TrendPct5d  = $trendPct
         VolumeRatio = $volRatio
+        RangeAbs    = $rangeAbs
+        RangePct    = $rangePct
     }
 }

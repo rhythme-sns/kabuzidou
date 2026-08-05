@@ -21,13 +21,12 @@ if (-not $snapshot -or -not $snapshot.items -or @($snapshot.items).Count -eq 0) 
     exit 0
 }
 
-function Get-KabuActualClose {
+function Get-KabuActualOHLC {
+    # 大引け後の実績値（始値・高値・安値・終値・値幅）をチャートから取得する。
     param([Parameter(Mandatory)][string]$Ticker)
     $c = Get-YahooChart -Ticker $Ticker -Range "5d" -Interval "1d"
     if (-not $c) { return $null }
-    $closes = @($c.Close | Where-Object { $_ -ne $null })
-    if ($closes.Count -eq 0) { return $null }
-    return [double]$closes[-1]
+    return Get-KabuMomentum -Chart $c
 }
 
 $sectionLabels = @{
@@ -38,11 +37,12 @@ $sectionLabels = @{
     portfolio = "保有株"
 }
 
-# --- 各予測項目の実績値を取得し、朝との差分を計算する ---
+# --- 各予測項目の実績値（始値・高値・安値・終値・値幅）を取得し、朝との差分を計算する ---
 $reviewItems = New-Object System.Collections.Generic.List[object]
 foreach ($p in $snapshot.items) {
-    $actualClose = Get-KabuActualClose -Ticker $p.ticker
+    $actualM = Get-KabuActualOHLC -Ticker $p.ticker
     Start-Sleep -Milliseconds 300
+    $actualClose = if ($actualM) { $actualM.LastClose } else { $null }
     if (-not $actualClose -or -not $p.baseClose -or $p.baseClose -eq 0) {
         Write-KabuLog "実績値取得スキップ ($($p.name)/$($p.ticker))" -Level "WARN"
         continue
@@ -56,8 +56,12 @@ foreach ($p in $snapshot.items) {
         Name                  = $p.name
         Ticker                = $p.ticker
         BaseClose             = $p.baseClose
+        ActualOpen            = $actualM.LastOpen
+        ActualHigh            = $actualM.LastHigh
+        ActualLow             = $actualM.LastLow
         ActualClose           = $actualClose
         ActualChangePct       = $actualChangePct
+        ActualRangePct        = $actualM.RangePct
         AiExpectedMove        = $p.aiExpectedMove
         AiConfidencePct       = $p.aiConfidencePct
         AiSummary             = $p.aiSummary
@@ -87,6 +91,7 @@ if ($settings.enableAiInsights) {
                 aiConfidencePct = $_.AiConfidencePct
                 view            = $_.View
                 actualChangePct = $_.ActualChangePct
+                actualRangePct  = $_.ActualRangePct
             }
         }
         $itemsJson = $itemsForPrompt | ConvertTo-Json -Depth 5 -Compress
@@ -94,7 +99,10 @@ if ($settings.enableAiInsights) {
         $systemPrompt = @"
 あなたは日本の個人投資家向けの株価予測システムの精度検証を行うアシスタントです。
 朝レポートで提示した各銘柄の予測（変動目安aiExpectedMove・信頼度aiConfidencePct・保有株の見立てview）と、
-その日の終値時点での実際の騰落率(actualChangePct、当日始値からではなく前日終値基準)を比較し、日本語で以下を生成してください。
+その日の終値時点での実際の騰落率(actualChangePct、当日始値からではなく前日終値基準)・当日の値幅(actualRangePct、
+高値と安値の差を終値比%にしたもの)を比較し、日本語で以下を生成してください。
+actualRangePctが大きい銘柄は日中の振れ幅も大きかったことを踏まえてコメントしてください
+（例: 終値ベースでは小幅でも値幅が大きければ「日中の振れ幅は大きかった」等）。
 
 - items: 各銘柄について
   - id: 対応するid
@@ -168,7 +176,9 @@ $rowsHtml = foreach ($r in ($reviewItems | Sort-Object -Property Section)) {
     } else { "-" }
     "<tr><td style='padding:4px 8px;'>$($r.SectionLabel)</td><td style='padding:4px 8px;'>$($r.Name)</td>" +
     "<td style='padding:4px 8px;font-size:13px;'>$predicted$confText</td>" +
+    "<td style='padding:4px 8px;'>$($r.ActualOpen)</td><td style='padding:4px 8px;'>$($r.ActualHigh)</td><td style='padding:4px 8px;'>$($r.ActualLow)</td><td style='padding:4px 8px;'>$($r.ActualClose)</td>" +
     "<td style='padding:4px 8px;color:$(if($r.ActualChangePct -ge 0){"#c0392b"}else{"#2471a3"});'>$(Format-Pct $r.ActualChangePct)</td>" +
+    "<td style='padding:4px 8px;'>$(Format-Pct $r.ActualRangePct)</td>" +
     "<td style='padding:4px 8px;'>$verdictHtml</td></tr>"
 }
 
@@ -189,7 +199,7 @@ $body = @"
 $overallHtml
 <h3>銘柄別 予測 vs 実績</h3>
 <table style='border-collapse:collapse;font-size:14px;'>
-<tr><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>区分</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>銘柄</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>朝の予測</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>本日実績(前日比)</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>判定</th></tr>
+<tr><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>区分</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>銘柄</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>朝の予測</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>始値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>高値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>安値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>終値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>前日比</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>値幅</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>判定</th></tr>
 $($rowsHtml -join "")
 </table>
 </div>

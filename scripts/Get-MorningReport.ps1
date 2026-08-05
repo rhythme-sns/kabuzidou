@@ -32,7 +32,7 @@ $indexRows = foreach ($idx in $indices) {
     if (-not $c) { continue }
     $m = Get-KabuMomentum -Chart $c
     if (-not $m) { continue }
-    "<tr><td>$($idx.Name)</td><td>$($m.LastClose)</td><td>$(Format-Pct $m.ChangePct)</td></tr>"
+    "<tr><td>$($idx.Name)</td><td>$($m.LastOpen)</td><td>$($m.LastHigh)</td><td>$($m.LastLow)</td><td>$($m.LastClose)</td><td>$(Format-Pct $m.ChangePct)</td><td>$(Format-Pct $m.RangePct)</td></tr>"
 }
 
 # --- ウォッチリストのモメンタム収集 ---
@@ -47,9 +47,13 @@ $results = foreach ($stock in $watchlist) {
         Ticker      = $stock.ticker
         Name        = $stock.name
         Category    = $(if ($stock.category) { $stock.category } else { "large" })
+        Open        = $m.LastOpen
+        High        = $m.LastHigh
+        Low         = $m.LastLow
         ChangePct   = $m.ChangePct
         TrendPct5d  = $m.TrendPct5d
         VolumeRatio = $m.VolumeRatio
+        RangePct    = $m.RangePct
         LastClose   = $m.LastClose
     }
 }
@@ -94,7 +98,10 @@ $lgFallers = $largeResults | Sort-Object -Property ChangePct | Select-Object -Fi
 $newsReasonCache = @{}
 function Add-KabuReason($rows, [bool]$IsBuyCandidate = $false) {
     foreach ($r in $rows) {
-        $momentum = [PSCustomObject]@{ ChangePct = $r.ChangePct; TrendPct5d = $r.TrendPct5d; VolumeRatio = $r.VolumeRatio }
+        $momentum = [PSCustomObject]@{
+            ChangePct = $r.ChangePct; TrendPct5d = $r.TrendPct5d; VolumeRatio = $r.VolumeRatio
+            LastOpen = $r.Open; LastHigh = $r.High; LastLow = $r.Low; LastClose = $r.LastClose; RangePct = $r.RangePct
+        }
         $chartReason = Get-KabuChartReasonText -Momentum $momentum
 
         if (-not $newsReasonCache.ContainsKey($r.Name)) {
@@ -107,7 +114,7 @@ function Add-KabuReason($rows, [bool]$IsBuyCandidate = $false) {
         $r | Add-Member -MemberType NoteProperty -Name "Reason" -Value $reasonText -Force
         $r | Add-Member -MemberType NoteProperty -Name "ReasonLink" -Value $(if ($newsReason) { $newsReason.Link } else { $null }) -Force
 
-        $aiId = New-KabuAIItem -Items $aiItems -Name $r.Name -Context $reasonText -ChangePct $r.ChangePct -TrendPct5d $r.TrendPct5d -IsBuyCandidate $IsBuyCandidate
+        $aiId = New-KabuAIItem -Items $aiItems -Name $r.Name -Context $reasonText -ChangePct $r.ChangePct -TrendPct5d $r.TrendPct5d -RangePct $r.RangePct -IsBuyCandidate $IsBuyCandidate
         $r | Add-Member -MemberType NoteProperty -Name "AIId" -Value $aiId -Force
     }
     return $rows
@@ -143,23 +150,27 @@ function Build-Table($rows, $cols, $Insights) {
         $reasonCell = if ($r.ReasonLink) { "$($r.Reason) <a href='$($r.ReasonLink)' style='font-size:12px;'>[記事]</a>" } else { $r.Reason }
         $aiHtml = Get-KabuAIHtml -AIId $r.AIId -Insights $Insights
         "<tr><td style='padding:4px 8px;'>$($r.Name)</td><td style='padding:4px 8px;'>$($r.Ticker)</td>" +
+        "<td style='padding:4px 8px;'>$($r.Open)</td><td style='padding:4px 8px;'>$($r.High)</td><td style='padding:4px 8px;'>$($r.Low)</td>" +
         "<td style='padding:4px 8px;'>$($r.LastClose)</td>" +
         "<td style='padding:4px 8px;color:$(if($r.ChangePct -ge 0){"#c0392b"}else{"#2471a3"});'>$(Format-Pct $r.ChangePct)</td>" +
+        "<td style='padding:4px 8px;'>$(Format-Pct $r.RangePct)</td>" +
         "<td style='padding:4px 8px;'>$(Format-Pct $r.TrendPct5d)</td>" +
         "<td style='padding:4px 8px;'>x$($r.VolumeRatio)</td></tr>" +
-        "<tr><td colspan='6' style='padding:0 8px 8px 8px;font-size:12px;color:#555;'>根拠: $reasonCell$aiHtml</td></tr>"
+        "<tr><td colspan='10' style='padding:0 8px 8px 8px;font-size:12px;color:#555;'>根拠: $reasonCell$aiHtml</td></tr>"
     }
     return "<table style='border-collapse:collapse;font-size:14px;'>$header$($body -join '')</table>"
 }
-$cols = @("銘柄", "コード", "終値", "前日比", "5日トレンド", "出来高倍率")
+$cols = @("銘柄", "コード", "始値", "高値", "安値", "終値", "前日比", "値幅", "5日トレンド", "出来高倍率")
 
 function Build-SimpleTable($rows) {
     # 大型株の参考表示用。根拠・AI要約は付けない簡易テーブル（短期売買のメインはグロース株のため）。
     $header = "<tr>" + (($cols | ForEach-Object { "<th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>$_</th>" }) -join "") + "</tr>"
     $body = foreach ($r in $rows) {
         "<tr><td style='padding:4px 8px;'>$($r.Name)</td><td style='padding:4px 8px;'>$($r.Ticker)</td>" +
+        "<td style='padding:4px 8px;'>$($r.Open)</td><td style='padding:4px 8px;'>$($r.High)</td><td style='padding:4px 8px;'>$($r.Low)</td>" +
         "<td style='padding:4px 8px;'>$($r.LastClose)</td>" +
         "<td style='padding:4px 8px;color:$(if($r.ChangePct -ge 0){"#c0392b"}else{"#2471a3"});'>$(Format-Pct $r.ChangePct)</td>" +
+        "<td style='padding:4px 8px;'>$(Format-Pct $r.RangePct)</td>" +
         "<td style='padding:4px 8px;'>$(Format-Pct $r.TrendPct5d)</td>" +
         "<td style='padding:4px 8px;'>x$($r.VolumeRatio)</td></tr>"
     }
@@ -192,8 +203,8 @@ if ($portfolio -and $portfolio.Count -gt 0) {
             $newsReason = Get-KabuNewsReasonText -Query $h.proxyName
             Start-Sleep -Milliseconds 300
             if ($newsReason) { $view += "。$($newsReason.Text) <a href='$($newsReason.Link)' style='font-size:12px;'>[記事]</a>" }
-            $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $estPct -TrendPct5d $estTrend
-            [PSCustomObject]@{ Name = $h.name; Ticker = $h.proxyName; LastClose = "(推定)"; ChangePct = $estPct; TrendPct5d = $estTrend; VolumeRatio = "-"; View = $view; AIId = $aiId }
+            $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $estPct -TrendPct5d $estTrend -RangePct $m.RangePct
+            [PSCustomObject]@{ Name = $h.name; Ticker = $h.proxyName; Open = $m.LastOpen; High = $m.LastHigh; Low = $m.LastLow; LastClose = "(推定)"; ChangePct = $estPct; TrendPct5d = $estTrend; VolumeRatio = "-"; RangePct = $m.RangePct; View = $view; AIId = $aiId }
         } else {
             $c = Get-YahooChart -Ticker $h.ticker -Range "1mo" -Interval "1d"
             Start-Sleep -Milliseconds 300
@@ -208,8 +219,8 @@ if ($portfolio -and $portfolio.Count -gt 0) {
             $newsReason = Get-KabuNewsReasonText -Query $h.name
             Start-Sleep -Milliseconds 300
             if ($newsReason) { $view += "。$($newsReason.Text) <a href='$($newsReason.Link)' style='font-size:12px;'>[記事]</a>" }
-            $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $m.ChangePct -TrendPct5d $m.TrendPct5d
-            [PSCustomObject]@{ Name = $h.name; Ticker = $h.ticker; LastClose = $m.LastClose; ChangePct = $m.ChangePct; TrendPct5d = $m.TrendPct5d; VolumeRatio = $m.VolumeRatio; View = $view; AIId = $aiId }
+            $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $m.ChangePct -TrendPct5d $m.TrendPct5d -RangePct $m.RangePct
+            [PSCustomObject]@{ Name = $h.name; Ticker = $h.ticker; Open = $m.LastOpen; High = $m.LastHigh; Low = $m.LastLow; LastClose = $m.LastClose; ChangePct = $m.ChangePct; TrendPct5d = $m.TrendPct5d; VolumeRatio = $m.VolumeRatio; RangePct = $m.RangePct; View = $view; AIId = $aiId }
         }
     }
     $portfolioRows = $rows
@@ -246,7 +257,11 @@ function Get-KabuPredictionItem($r, [string]$Section, [bool]$IsBuyCandidate = $f
         section              = $Section
         name                 = $r.Name
         ticker               = $r.Ticker
+        baseOpen             = $r.Open
+        baseHigh             = $r.High
+        baseLow              = $r.Low
         baseClose            = $r.LastClose
+        baseRangePct         = $r.RangePct
         chartChangePct       = $r.ChangePct
         trendPct5d           = $r.TrendPct5d
         isBuyCandidate       = $IsBuyCandidate
@@ -268,7 +283,11 @@ foreach ($r in $portfolioRows) {
         section              = "portfolio"
         name                 = $r.Name
         ticker               = $r.Ticker
+        baseOpen             = $r.Open
+        baseHigh             = $r.High
+        baseLow              = $r.Low
         baseClose            = $r.LastClose
+        baseRangePct         = $r.RangePct
         chartChangePct       = $r.ChangePct
         trendPct5d           = $r.TrendPct5d
         isBuyCandidate       = $false
@@ -289,12 +308,16 @@ if ($portfolio -and $portfolio.Count -gt 0) {
     $prows = foreach ($r in $portfolioRows) {
         $aiHtml = Get-KabuAIHtml -AIId $r.AIId -Insights $aiInsights
         "<tr><td style='padding:4px 8px;'>$($r.Name)</td><td style='padding:4px 8px;'>$($r.Ticker)</td>" +
+        "<td style='padding:4px 8px;'>$($r.Open)</td><td style='padding:4px 8px;'>$($r.High)</td><td style='padding:4px 8px;'>$($r.Low)</td>" +
         "<td style='padding:4px 8px;'>$($r.LastClose)</td>" +
         "<td style='padding:4px 8px;color:$(if($r.ChangePct -ge 0){"#c0392b"}else{"#2471a3"});'>$(Format-Pct $r.ChangePct)</td>" +
+        "<td style='padding:4px 8px;'>$(Format-Pct $r.RangePct)</td>" +
         "<td style='padding:4px 8px;'>$($r.View)$aiHtml</td></tr>"
     }
     $portfolioHtml = "<h3>保有株の本日の見立て</h3><table style='border-collapse:collapse;font-size:14px;'>" +
-        "<tr><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>銘柄</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>コード/参照指数</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>終値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>前日比(推定含む)</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>コメント</th></tr>" +
+        "<tr><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>銘柄</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>コード/参照指数</th>" +
+        "<th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>始値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>高値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>安値</th>" +
+        "<th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>終値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>前日比(推定含む)</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>値幅</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>コメント</th></tr>" +
         ($prows -join "") + "</table>"
 } else {
     $portfolioHtml = "<p style='color:#888;'>保有株が config\portfolio.json に登録されていません。編集すると保有株の見立てが表示されます。</p>"
@@ -319,7 +342,7 @@ $aiFailedBanner
 
 <h3>市場概況</h3>
 <table style='border-collapse:collapse;font-size:14px;'>
-<tr><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>指標</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>前日比</th></tr>
+<tr><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>指標</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>始値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>高値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>安値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>終値</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>前日比</th><th style='text-align:left;padding:4px 8px;border-bottom:1px solid #ccc;'>値幅</th></tr>
 $($indexRows -join "")
 </table>
 
