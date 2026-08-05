@@ -33,7 +33,10 @@ function New-KabuAIItem {
     # 朝レポート/急変アラートで共用するAI問い合わせアイテムのファクトリ。
     # idはItemsリスト内で一意であればよいため、追加前のCountをそのまま採番に使う。
     param(
-        [Parameter(Mandatory)][System.Collections.Generic.List[object]]$Items,
+        # Mandatory + コレクション型の組み合わせだと、PowerShellは中身が空のリストを渡しただけで
+        # 「空のコレクションはバインドできない」というエラーを投げる（要素0件の状態でも$Items自体はnullではないのに）。
+        # このリストは呼び出し側で1件目を追加する時点では必ず空なので、AllowEmptyCollectionが必須。
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Items,
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Context,
         [double]$ChangePct = 0,
