@@ -66,6 +66,24 @@ $grBreakout = $growthResults | Where-Object { $_.ChangePct -gt 2 -and $_.VolumeR
 $grPullback = $growthResults | Where-Object { $_.TrendPct5d -gt 2 -and $_.ChangePct -lt 0 } |
     Sort-Object -Property TrendPct5d -Descending | Select-Object -First 5
 
+# 条件に完全一致する銘柄が無い日でも「該当なし」で終わらせず、最も条件に近い1銘柄だけは参考として出す。
+# 閾値未達分の合計（shortfall）が小さいほど「近い」とみなす。ただし実際には条件未達なので、
+# 買い候補としては数えない（IsBuyCandidate=falseにし、夕方の答え合わせ的中率トラッキングにも含めない）。
+$grBreakoutIsFallback = $false
+if ($grBreakout.Count -eq 0 -and $growthResults.Count -gt 0) {
+    $grBreakoutIsFallback = $true
+    $grBreakout = $growthResults | Sort-Object -Property @{ Expression = {
+        [math]::Max(0, 2 - $_.ChangePct) + [math]::Max(0, 1.5 - $_.VolumeRatio)
+    } } | Select-Object -First 1
+}
+$grPullbackIsFallback = $false
+if ($grPullback.Count -eq 0 -and $growthResults.Count -gt 0) {
+    $grPullbackIsFallback = $true
+    $grPullback = $growthResults | Sort-Object -Property @{ Expression = {
+        [math]::Max(0, 2 - $_.TrendPct5d) + [math]::Max(0, $_.ChangePct)
+    } } | Select-Object -First 1
+}
+
 # --- 大型株（参考情報。短期売買のメインはグロース株のため簡易表示のみ） ---
 $lgRisers = $largeResults | Sort-Object -Property ChangePct -Descending | Select-Object -First 3
 $lgFallers = $largeResults | Sort-Object -Property ChangePct | Select-Object -First 3
@@ -96,8 +114,14 @@ function Add-KabuReason($rows, [bool]$IsBuyCandidate = $false) {
 }
 $grRisers = Add-KabuReason $grRisers
 $grFallers = Add-KabuReason $grFallers
-$grBreakout = Add-KabuReason $grBreakout -IsBuyCandidate $true
-$grPullback = Add-KabuReason $grPullback -IsBuyCandidate $true
+$grBreakout = Add-KabuReason $grBreakout -IsBuyCandidate (-not $grBreakoutIsFallback)
+$grPullback = Add-KabuReason $grPullback -IsBuyCandidate (-not $grPullbackIsFallback)
+if ($grBreakoutIsFallback -and $grBreakout.Count -gt 0) {
+    $grBreakout[0].Reason = "※本日は条件未達（参考として最も近い銘柄）。$($grBreakout[0].Reason)"
+}
+if ($grPullbackIsFallback -and $grPullback.Count -gt 0) {
+    $grPullback[0].Reason = "※本日は条件未達（参考として最も近い銘柄）。$($grPullback[0].Reason)"
+}
 
 function Get-KabuAIHtml($AIId, $Insights) {
     # AI(Claude API)の分析結果をHTML断片にする。未取得/失敗時は空文字（ルールベース表示のみになる）。
@@ -235,8 +259,8 @@ function Get-KabuPredictionItem($r, [string]$Section, [bool]$IsBuyCandidate = $f
 $predictionItems = New-Object System.Collections.Generic.List[object]
 foreach ($r in $grRisers)   { $predictionItems.Add((Get-KabuPredictionItem $r "riser")) }
 foreach ($r in $grFallers)  { $predictionItems.Add((Get-KabuPredictionItem $r "faller")) }
-foreach ($r in $grBreakout) { $predictionItems.Add((Get-KabuPredictionItem $r "breakout" $true)) }
-foreach ($r in $grPullback) { $predictionItems.Add((Get-KabuPredictionItem $r "pullback" $true)) }
+foreach ($r in $grBreakout) { $predictionItems.Add((Get-KabuPredictionItem $r "breakout" (-not $grBreakoutIsFallback))) }
+foreach ($r in $grPullback) { $predictionItems.Add((Get-KabuPredictionItem $r "pullback" (-not $grPullbackIsFallback))) }
 foreach ($r in $portfolioRows) {
     if ($r.Ticker -notmatch '\.T$') { continue }
     $ai = if ($r.AIId -and $aiInsights.ContainsKey($r.AIId)) { $aiInsights[$r.AIId] } else { $null }
@@ -308,10 +332,18 @@ $(Build-Table $grRisers $cols $aiInsights)
 $(Build-Table $grFallers $cols $aiInsights)
 
 <h3>短期エントリー候補（出来高急増・上昇中のブレイクアウト型）</h3>
-$(if ($grBreakout.Count -gt 0) { Build-Table $grBreakout $cols $aiInsights } else { "<p style='color:#888;'>条件に合致する銘柄はありませんでした。</p>" })
+$(if ($grBreakout.Count -eq 0) { "<p style='color:#888;'>候補を算出できませんでした（データ取得エラー等）。</p>" }
+  else {
+    $note = if ($grBreakoutIsFallback) { "<p style='color:#888;font-size:12px;'>本日は条件（前日比+2%超・出来高1.5倍以上）を満たす銘柄はありませんでした。参考として最も近い銘柄を1件のみ表示します（買い候補ではありません）。</p>" } else { "" }
+    $note + (Build-Table $grBreakout $cols $aiInsights)
+  })
 
 <h3>押し目買い候補（中期上昇トレンド中の一服）</h3>
-$(if ($grPullback.Count -gt 0) { Build-Table $grPullback $cols $aiInsights } else { "<p style='color:#888;'>条件に合致する銘柄はありませんでした。</p>" })
+$(if ($grPullback.Count -eq 0) { "<p style='color:#888;'>候補を算出できませんでした（データ取得エラー等）。</p>" }
+  else {
+    $note = if ($grPullbackIsFallback) { "<p style='color:#888;font-size:12px;'>本日は条件（5日トレンド+2%超・前日比マイナス）を満たす銘柄はありませんでした。参考として最も近い銘柄を1件のみ表示します（買い候補ではありません）。</p>" } else { "" }
+    $note + (Build-Table $grPullback $cols $aiInsights)
+  })
 
 <h2 style='margin-top:24px;'>大型株（参考情報）</h2>
 <h3>値上がり上位</h3>
