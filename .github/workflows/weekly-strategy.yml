@@ -1,0 +1,41 @@
+name: Kabuzidou Weekly Strategy
+
+on:
+  # GitHub Actionsのschedule(cron)はベストエフォートで、実測で10時間以上遅延することが
+  # あるため使用しない(2026-08-03/04に平日朝レポート・夕方レビューとも約10.5時間遅延を確認済み)。
+  # 代わりに外部cronサービス(cron-job.org等)からGitHub REST APIの
+  # workflow_dispatch エンドポイントを毎週末の正確な時刻に叩く運用にする。
+  # 手順は README.md の「メール配信スケジュール」を参照。
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  weekly-strategy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run weekly strategy
+        shell: powershell
+        env:
+          KABU_SMTP_USER: ${{ secrets.KABU_SMTP_USER }}
+          KABU_SMTP_PASS: ${{ secrets.KABU_SMTP_PASS }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: .\scripts\Get-WeeklyStrategy.ps1
+
+      - name: Persist state
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/
+          $changed = git status --porcelain
+          if ($changed) {
+            git commit -m "chore: update kabuzidou state [skip ci]"
+            git pull --rebase
+            git push
+          } else {
+            Write-Host "No state changes."
+          }

@@ -7,11 +7,20 @@
 - 保有株が今日どう動きそうかの見立て
 - 市場概況（日経平均・S&P500・ドル円の前日比）
 
-さらに毎日17:13頃（東証の大引け後）に、その日の朝レポートの予測が実際どうだったかを答え合わせするメールを送ります。予測と実績の差分・AIによる的中度評価と全体総括を送信し、そこから得た教訓（見積もりの調整ポイント）を蓄積して、翌朝以降のレポート生成AIにフィードバックします（`state/lessons.json`）。
+さらに毎日17:13頃（東証の大引け後）に、その日の朝レポートの予測が実際どうだったかを答え合わせするメールを送ります。
 
 日中（8:30〜15:30、15分おき）に、相場急変につながりうるニュースや保有株の急な値動き（既定は±3%）を検知するアラート機能もあります。**現在は既定でオフになっています**（`config\settings.json` の `newsWatchAlertsEnabled`）。検知・状態保存自体は動き続けるため、`true` に戻せばそのまま再開できます。
 
 **重要な注意点**: これは過去の値動き・出来高・ニュース見出しから機械的に作る参考情報であり、株価予測を保証するものではありません。投資判断は自己責任でお願いします。
+
+## 4つの役割（エージェント）構成
+
+分析の各段階を、それぞれ独立した役割（システムプロンプト）を持つAI呼び出しに分けています。
+
+1. **アナリスト**（`Get-MorningReport.ps1`、毎朝8:00 JST）: 市場・ウォッチリスト・保有株をリサーチし、根拠付きの予測データを `state/predictions/日付.json` に保存してメール送信。
+2. **監査官**（`Get-EveningReview.ps1`の前半、毎日17:13 JST）: アナリストの予測と大引け後の実績を照合し、的中/外れの**因果関係**を厳格に分析。結果を `state/audits/日付.json` に保存（無期限蓄積）。
+3. **戦略コンサルタント**（`Get-EveningReview.ps1`の後半、監査官と同じタイミングで連続実行）: 監査官の因果分析から本日の反省点・繰り返しの負けパターンを抽出し、次回以降のアナリストへの申し送りとして `state/lessons.json` に蓄積。ここまでの結果は夕方の答え合わせメール1通にまとめて届きます。
+4. **ストラテジスト**（`Get-WeeklyStrategy.ps1`、毎週末）: `state/audits/` と `state/lessons.json` の全期間データを俯瞰し、繰り返し現れる勝ちパターン・負けパターンを抽出して取引基準を作成、専用メールで報告（`state/strategy/日付.json` にも保存）。蓄積が `weeklyStrategyMinDays`（既定5日）分に満たない間は「データ蓄積中」の簡易メールのみ届きます。
 
 ## 仕組み
 
@@ -116,7 +125,16 @@ https://cron-job.org/en/signup/ でメールアドレス登録するだけでOK�
 - それ以外（Headers・body・Request method）は手順3と同じ
 - **Schedule**: 毎週 月〜金曜日、`17:13`（Timezoneは`Asia/Tokyo`）
 
-### 5. 動作確認
+### 5. 週次ストラテジストレポート用のジョブを作成する
+
+同様にもう1つ作成（勝ちパターン・負けパターン・取引基準を毎週報告する、ストラテジストの実行トリガー）:
+
+- **Title**: `kabuzidou-weekly-strategy`
+- **URL**: `https://api.github.com/repos/rhythme-sns/kabuzidou/actions/workflows/weekly-strategy.yml/dispatches`
+- それ以外（Headers・body・Request method）は手順3と同じ
+- **Schedule**: 毎週 土曜日、`09:00`（Timezoneは`Asia/Tokyo`）※曜日・時刻は好みに合わせて変更可
+
+### 6. 動作確認
 
 cron-job.orgの各ジョブ画面から「Test run」を実行し、GitHubリポジトリの Actions タブで
 ワークフローが起動してメールが届くか確認してください。以後は登録した時刻ちょうどに
@@ -138,7 +156,7 @@ Start-ScheduledTask -TaskName "Kabuzidou-NewsWatch"
 - `config\watchlist.json` : スクリーニング対象の銘柄一覧（自由に追加・削除可）
 - `config\portfolio.json` : 保有株一覧
 - `config\news_keywords.json` : 急変とみなすニュースキーワード
-- `config\settings.json` : SMTP設定、送信先メールアドレス、急変アラートの閾値（`alertThresholdPct`、既定3%）、`newsWatchAlertsEnabled`（日中アラートのメール送信有無、既定false）、`eveningReviewEnabled`（17:13答え合わせメールの有無、既定true）
+- `config\settings.json` : SMTP設定、送信先メールアドレス、急変アラートの閾値（`alertThresholdPct`、既定3%）、`newsWatchAlertsEnabled`（日中アラートのメール送信有無、既定false）、`eveningReviewEnabled`（17:13答え合わせメールの有無、既定true）、`weeklyStrategyEnabled`（週次ストラテジストレポートの有無、既定true）、`weeklyStrategyMinDays`（パターン抽出に必要な最低監査データ日数、既定5）
 
 ## 制限事項
 

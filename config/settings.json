@@ -9,5 +9,7 @@
   "enableAiInsights": true,
   "anthropicModel": "claude-haiku-4-5",
   "newsWatchAlertsEnabled": false,
-  "eveningReviewEnabled": true
+  "eveningReviewEnabled": true,
+  "weeklyStrategyEnabled": true,
+  "weeklyStrategyMinDays": 5
 }

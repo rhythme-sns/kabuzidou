@@ -393,6 +393,48 @@ function Get-KabuPredictionSnapshot {
     return Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
+function Save-KabuAudit {
+    # 監査官(Get-EveningReview.ps1)が生成した「予測vs実績の因果分析」を日付単位でstate配下に保存する。
+    # predictionsとは異なりプルーニングしない（ストラテジストが全期間のデータを俯瞰するための蓄積用）。
+    param(
+        [Parameter(Mandatory)]$Audit,
+        [Parameter(Mandatory)][string]$Date
+    )
+    $dir = Join-Path $script:StateDir "audits"
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $path = Join-Path $dir "$Date.json"
+    $Audit | ConvertTo-Json -Depth 8 | Set-Content -Path $path -Encoding UTF8
+}
+
+function Get-KabuAudit {
+    # 指定日の監査官の因果分析結果を読み込む。存在しなければ$nullを返す。
+    param([Parameter(Mandatory)][string]$Date)
+    $path = Join-Path $script:StateDir "audits\$Date.json"
+    if (-not (Test-Path $path)) { return $null }
+    return Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
+function Get-KabuAuditHistory {
+    # 蓄積された監査官の因果分析結果を全件、日付昇順で読み込む。ストラテジストの入力データ。
+    $dir = Join-Path $script:StateDir "audits"
+    if (-not (Test-Path $dir)) { return @() }
+    $files = Get-ChildItem -Path $dir -Filter "*.json" | Sort-Object -Property Name
+    return @($files | ForEach-Object { Get-Content -Path $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json })
+}
+
+function Save-KabuStrategy {
+    # ストラテジスト(Get-WeeklyStrategy.ps1)が生成した取引基準を日付単位でstate配下に保存する。
+    # 過去分もプルーニングせず残す（基準がどう変遷したかの記録として）。
+    param(
+        [Parameter(Mandatory)]$Strategy,
+        [Parameter(Mandatory)][string]$Date
+    )
+    $dir = Join-Path $script:StateDir "strategy"
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $path = Join-Path $dir "$Date.json"
+    $Strategy | ConvertTo-Json -Depth 8 | Set-Content -Path $path -Encoding UTF8
+}
+
 function Get-KabuLessons {
     # 過去の答え合わせ分析（教訓）の履歴を読み込む。存在しなければ空配列を返す。
     $path = Join-Path $script:StateDir "lessons.json"
@@ -403,9 +445,11 @@ function Get-KabuLessons {
 
 function Add-KabuLesson {
     # 答え合わせ分析（教訓）を1件追記し、直近$KeepLast件のみ保持する（無限に肥大化させないため）。
+    # ストラテジスト(Get-WeeklyStrategy.ps1)が長期の勝敗パターンを抽出する材料にもなるため、
+    # 朝レポートのプロンプトに使う直近数件だけでなく、ある程度長期間分（目安1年強の営業日数）保持する。
     param(
         [Parameter(Mandatory)]$Lesson,
-        [int]$KeepLast = 14
+        [int]$KeepLast = 300
     )
     $path = Join-Path $script:StateDir "lessons.json"
     $existing = Get-KabuLessons
