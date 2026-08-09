@@ -16,19 +16,19 @@ permissions:
 
 jobs:
   send-outbox:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Send outbox mail
-        shell: pwsh
+        shell: powershell
         env:
           KABU_SMTP_USER: ${{ secrets.KABU_SMTP_USER }}
           KABU_SMTP_PASS: ${{ secrets.KABU_SMTP_PASS }}
-        run: ./scripts/Send-Outbox.ps1
+        run: .\scripts\Send-Outbox.ps1
 
       - name: Remove sent outbox file
-        shell: pwsh
+        shell: powershell
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
