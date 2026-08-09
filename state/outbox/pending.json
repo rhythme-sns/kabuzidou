@@ -1,0 +1,5 @@
+{
+  "type": "test",
+  "subject": "【kabuzidou】送信テスト（routines移行後の疎通確認）",
+  "bodyHtml": "<div style='font-family:sans-serif;'><h2>送信テストメール</h2><p>これはsend-outbox.ymlのSMTP送信経路（GitHub Actions）が正常に動作するかを確認するためのテストメールです。このメールが届いていれば、GitHub Actions上でのSMTP送信（ポート587）は問題なく機能しています。</p></div>"
+}
