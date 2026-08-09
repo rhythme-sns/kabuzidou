@@ -8,32 +8,31 @@
 - 市場概況（日経平均・S&P500・ドル円の前日比）
 
 さらに毎日17:13頃（東証の大引け後）に、その日の朝レポートの予測が実際どうだったかを答え合わせするメールを送ります。
-
-日中（8:30〜15:30、15分おき）に、相場急変につながりうるニュースや保有株の急な値動き（既定は±3%）を検知するアラート機能もあります。**現在は既定でオフになっています**（`config\settings.json` の `newsWatchAlertsEnabled`）。検知・状態保存自体は動き続けるため、`true` に戻せばそのまま再開できます。
+週末には、これまでの答え合わせデータを俯瞰して勝ちパターン・負けパターン・取引基準をまとめる週次レポートも届きます。
 
 **重要な注意点**: これは過去の値動き・出来高・ニュース見出しから機械的に作る参考情報であり、株価予測を保証するものではありません。投資判断は自己責任でお願いします。
 
 ## 4つの役割（エージェント）構成
 
-分析の各段階を、それぞれ独立した役割（システムプロンプト）を持つAI呼び出しに分けています。
+分析の各段階を、それぞれ独立した役割（システムプロンプト）を持つAI呼び出しに分けています。実行主体は
+[claude.ai/code/routines](https://claude.ai/code/routines) のスケジュール実行クラウドエージェント（Claude Pro契約内、追加のAPI従量課金なし）です。
 
-1. **アナリスト**（`Get-MorningReport.ps1`、毎朝8:00 JST）: 市場・ウォッチリスト・保有株をリサーチし、根拠付きの予測データを `state/predictions/日付.json` に保存してメール送信。
-2. **監査官**（`Get-EveningReview.ps1`の前半、毎日17:13 JST）: アナリストの予測と大引け後の実績を照合し、的中/外れの**因果関係**を厳格に分析。結果を `state/audits/日付.json` に保存（無期限蓄積）。
-3. **戦略コンサルタント**（`Get-EveningReview.ps1`の後半、監査官と同じタイミングで連続実行）: 監査官の因果分析から本日の反省点・繰り返しの負けパターンを抽出し、次回以降のアナリストへの申し送りとして `state/lessons.json` に蓄積。ここまでの結果は夕方の答え合わせメール1通にまとめて届きます。
-4. **ストラテジスト**（`Get-WeeklyStrategy.ps1`、毎週末）: `state/audits/` と `state/lessons.json` の全期間データを俯瞰し、繰り返し現れる勝ちパターン・負けパターンを抽出して取引基準を作成、専用メールで報告（`state/strategy/日付.json` にも保存）。蓄積が `weeklyStrategyMinDays`（既定5日）分に満たない間は「データ蓄積中」の簡易メールのみ届きます。
+1. **アナリスト**（`kabuzidou-morning-report` routine、毎朝8:00 JST）: 市場・ウォッチリスト・保有株をリサーチし、根拠付きの予測データを `state/predictions/日付.json` に保存。メール本文を `state/outbox/pending.json` に書き出してリポジトリにpush。
+2. **監査官**（`kabuzidou-evening-review` routineの前半、毎日17:13 JST）: アナリストの予測と大引け後の実績を照合し、的中/外れの**因果関係**を厳格に分析。結果を `state/audits/日付.json` に保存（無期限蓄積）。
+3. **戦略コンサルタント**（同routineの後半、監査官と同じセッション内で連続実行）: 監査官の因果分析から本日の反省点・繰り返しの負けパターンを抽出し、次回以降のアナリストへの申し送りとして `state/lessons.json` に蓄積。ここまでの結果は夕方の答え合わせメール1通にまとめてoutboxに書き出す。
+4. **ストラテジスト**（`kabuzidou-weekly-strategy` routine、毎週末）: `state/audits/` と `state/lessons.json` の全期間データを俯瞰し、繰り返し現れる勝ちパターン・負けパターンを抽出して取引基準を作成（`state/strategy/日付.json` にも保存）。蓄積が `weeklyStrategyMinDays`（既定5日）分に満たない間は「データ蓄積中」の簡易メールのみ届きます。
 
-## 仕組み
+## 仕組み（分析とメール送信を分離）
 
-- データ取得: Yahoo Finance の非公式チャートAPI（APIキー不要、日本株は `7203.T` のような証券コード指定）
-- ニュース: Google News RSS（キーワード検索、APIキー不要）
-- 配信: Gmail の SMTP（アプリパスワード使用）
-- 実行: GitHub Actions（`.github/workflows/`）。PCの電源に関係なく実行されるのが利点だが、
-  `schedule`(cron)トリガーはベストエフォートで数時間単位の遅延が起きうるため使用していない。
-  代わりに外部cronサービスからGitHub APIの `workflow_dispatch` を正確なJST時刻に呼び出す
-  （詳細は下記「メール配信スケジュール」）。ローカルPCでの実行用に Windows タスクスケジューラ
-  版（`Register-Tasks.ps1`）も用意してあるが、現在の主経路はGitHub Actions。
-- 認証情報: GitHub Actions実行時はリポジトリのSecrets（`KABU_SMTP_USER`/`KABU_SMTP_PASS`/`ANTHROPIC_API_KEY`）。
-  ローカル実行時はDPAPIで暗号化し `%LOCALAPPDATA%\kabuzidou\smtp_cred.xml` に保存（このPC・このWindowsアカウントでしか復号不可）
+分析（LLM呼び出し）とメール送信（SMTP）を別の仕組みに分離することで、Claude Pro契約の範囲内・API従量課金なしで運用できるようにしています。
+
+1. **分析**: [claude.ai/code/routines](https://claude.ai/code/routines) に登録された3つのクラウドエージェント（上記の役割）が、スケジュール通りに起動 → Yahoo Financeの非公式チャートAPI・Google News RSS（いずれもAPIキー不要）から情報収集 → Claude自身の推論でリサーチ・分析 → 結果を `state/` 配下のJSONとメール本文（`state/outbox/pending.json`）に書き込み、リポジトリ（`rhythme-sns/kabuzidou`、masterブランチ）にpushします。ここではAnthropic APIキーへの課金は発生しません（Claude Proの利用枠内）。
+2. **メール送信**: `state/outbox/**` へのpushをトリガーに GitHub Actions（`.github/workflows/send-outbox.yml`）が起動し、`pending.json` の中身をそのままGmail SMTP（アプリパスワード使用）で送信するだけの「発送係」です。LLM呼び出しは一切行わないため `ANTHROPIC_API_KEY` は不要です。送信後はoutboxファイルを削除してコミットします。
+3. **認証情報**: GitHub Actions実行時はリポジトリのSecrets（`KABU_SMTP_USER`/`KABU_SMTP_PASS`）のみで足ります。
+
+### ローカル実行（オプションのフォールバック）
+
+自前のAnthropic APIキーを持っていて、従来通りローカルPCやGitHub Actions上でPowerShellスクリプト（`Get-MorningReport.ps1`等）を直接実行し、Claude APIで分析させたい場合はそのまま使えます（`config\settings.json` の `enableAiInsights`/`anthropicModel`、ローカル実行用の `Register-Tasks.ps1`、GitHub Actions上の `ANTHROPIC_API_KEY` Secretsなどは温存してあります）。ただし主経路ではなく、これらのスクリプトはroutinesが読む「計算ロジックの仕様書」としての役割も兼ねています。
 
 ## 初回セットアップ（3ステップ）
 
@@ -44,16 +43,12 @@
 1. https://myaccount.google.com/security で「2段階認証」を有効にする
 2. https://myaccount.google.com/apppasswords でアプリパスワード（16桁）を発行する
 
-### 2. 認証情報を登録する
+### 2. 認証情報をGitHub Actions Secretsに登録する
 
-PowerShellを開いて:
+リポジトリの Settings → Secrets and variables → Actions で以下を登録してください（メール送信用の`send-outbox.yml`が使用します）。
 
-```powershell
-cd "C:\Users\reon2\OneDrive\デスクトップ\kabuzidou\scripts"
-.\Setup-Credentials.ps1
-```
-
-送信元メールアドレスと、上で発行したアプリパスワード（Googleの通常ログインパスワードではない）を入力してください。
+- `KABU_SMTP_USER`: 送信元メールアドレス
+- `KABU_SMTP_PASS`: 上で発行したアプリパスワード（Googleの通常ログインパスワードではない）
 
 その後 `config\settings.json` の `fromAddress` を、入力した送信元メールアドレスに合わせて編集してください（`toAddresses` は既に reon24520@gmail.com になっています）。
 
@@ -72,94 +67,28 @@ cd "C:\Users\reon2\OneDrive\デスクトップ\kabuzidou\scripts"
 
 証券コードは「4桁のコード + `.T`」です（例: 任天堂なら `7974.T`）。
 
-### 4. タスクスケジューラに登録する
+### 4. routinesの起動確認
 
-```powershell
-.\Register-Tasks.ps1
-```
-
-管理者権限を求められて失敗する場合は、PowerShellを「管理者として実行」してから再度実行してください。
-
-## メール配信スケジュール（正確な時刻に届ける設定）
-
-GitHub Actionsの`schedule`(cron)トリガーは公式に「ベストエフォート」とされており、実測でも
-朝レポート・夕方レビューとも10時間以上遅延することが確認されています（2026-08-03/04）。
-そのため`schedule`は使わず、外部の無料cronサービスから正確なJST時刻にGitHub APIを叩いて
-ワークフローを起動する方式にしています。以下は [cron-job.org](https://cron-job.org) を使う手順です
-（他の外部cron/監視サービスでも同じ要領で設定可能）。
-
-### 1. GitHub Personal Access Token（PAT）を発行する
-
-1. https://github.com/settings/personal-access-tokens/new を開く
-2. Repository access → "Only select repositories" → `rhythme-sns/kabuzidou` を選択
-3. Permissions → Repository permissions → **Actions: Read and write** に設定
-4. Generate token → 表示されたトークン（`github_pat_...`）をコピーして保存
-   （このトークンはワークフローを起動できる権限を持つ機密情報です。cron-job.org以外には貼らないでください）
-
-### 2. cron-job.org に無料アカウント登録する
-
-https://cron-job.org/en/signup/ でメールアドレス登録するだけでOK（無料枠で十分）。
-
-### 3. 朝レポート用のジョブを作成する
-
-「Create cronjob」から:
-
-- **Title**: `kabuzidou-morning-report`
-- **URL**: `https://api.github.com/repos/rhythme-sns/kabuzidou/actions/workflows/morning-report.yml/dispatches`
-- **Request method**: `POST`
-- **Common → Timezone**: `Asia/Tokyo`
-- **Schedule**: 毎週 月〜金曜日、`08:00`
-- **Advanced → Headers**（Key: Value形式で追加）:
-  - `Authorization`: `Bearer <手順1で発行したトークン>`
-  - `Accept`: `application/vnd.github+json`
-  - `X-GitHub-Api-Version`: `2022-11-28`
-  - `Content-Type`: `application/json`
-- **Advanced → Request body**: `{"ref":"master"}`
-
-### 4. 夕方レビュー用のジョブを作成する
-
-同様にもう1つ作成:
-
-- **Title**: `kabuzidou-evening-review`
-- **URL**: `https://api.github.com/repos/rhythme-sns/kabuzidou/actions/workflows/evening-review.yml/dispatches`
-- それ以外（Headers・body・Request method）は手順3と同じ
-- **Schedule**: 毎週 月〜金曜日、`17:13`（Timezoneは`Asia/Tokyo`）
-
-### 5. 週次ストラテジストレポート用のジョブを作成する
-
-同様にもう1つ作成（勝ちパターン・負けパターン・取引基準を毎週報告する、ストラテジストの実行トリガー）:
-
-- **Title**: `kabuzidou-weekly-strategy`
-- **URL**: `https://api.github.com/repos/rhythme-sns/kabuzidou/actions/workflows/weekly-strategy.yml/dispatches`
-- それ以外（Headers・body・Request method）は手順3と同じ
-- **Schedule**: 毎週 土曜日、`09:00`（Timezoneは`Asia/Tokyo`）※曜日・時刻は好みに合わせて変更可
-
-### 6. 動作確認
-
-cron-job.orgの各ジョブ画面から「Test run」を実行し、GitHubリポジトリの Actions タブで
-ワークフローが起動してメールが届くか確認してください。以後は登録した時刻ちょうどに
-GitHub API経由で起動されるため、GitHub Actions自体の`schedule`遅延の影響を受けません。
+[claude.ai/code/routines](https://claude.ai/code/routines) に登録済みの3つのルーティン（`kabuzidou-morning-report` / `kabuzidou-evening-review` / `kabuzidou-weekly-strategy`）が有効（Enabled）になっているか確認してください。編集・一時停止・手動実行はこのページから行えます。
 
 ## 動作確認
 
-登録後、すぐに手動実行してメールが届くか確認できます。
+routinesの画面から対象のルーティンを選び「Run now」で手動実行できます。実行後、数分待って以下を確認してください。
 
-```powershell
-Start-ScheduledTask -TaskName "Kabuzidou-MorningReport"
-Start-ScheduledTask -TaskName "Kabuzidou-NewsWatch"
-```
+- GitHubリポジトリの Actions タブに `Kabuzidou Send Outbox` の実行履歴があるか
+- reon24520@gmail.com にメールが届いているか
 
-数十秒〜数分待ってから届いているか確認してください。届かない場合は `logs\` フォルダ内のログを確認してください。
+届かない場合は、まずroutineの実行ログ（claude.ai側）で分析自体が失敗していないか、次にGitHub Actionsの `send-outbox` ジョブでSMTP送信エラーが出ていないか（`KABU_SMTP_USER`/`KABU_SMTP_PASS` Secretsの設定ミスが典型）の順に確認してください。
 
 ## カスタマイズ
 
 - `config\watchlist.json` : スクリーニング対象の銘柄一覧（自由に追加・削除可）
 - `config\portfolio.json` : 保有株一覧
-- `config\news_keywords.json` : 急変とみなすニュースキーワード
-- `config\settings.json` : SMTP設定、送信先メールアドレス、急変アラートの閾値（`alertThresholdPct`、既定3%）、`newsWatchAlertsEnabled`（日中アラートのメール送信有無、既定false）、`eveningReviewEnabled`（17:13答え合わせメールの有無、既定true）、`weeklyStrategyEnabled`（週次ストラテジストレポートの有無、既定true）、`weeklyStrategyMinDays`（パターン抽出に必要な最低監査データ日数、既定5）
+- `config\settings.json` : SMTP設定、送信先メールアドレス、`eveningReviewEnabled`（17:13答え合わせメールの有無、既定true）、`weeklyStrategyEnabled`（週次ストラテジストレポートの有無、既定true）、`weeklyStrategyMinDays`（パターン抽出に必要な最低監査データ日数、既定5）。`enableAiInsights`/`anthropicModel` はローカル実行フォールバック専用。
+- 各ルーティンのスケジュール・プロンプト自体を変更したい場合は [claude.ai/code/routines](https://claude.ai/code/routines) から編集してください。
 
 ## 制限事項
 
-- PCがスリープ/シャットダウン中は実行されません（`Register-Tasks.ps1` で `-WakeToRun` を設定していますが、スリープからの復帰は機種依存で確実ではありません）。ノートPCなら朝の時間帯は電源ONまたは有線接続＋スリープ復帰設定を推奨します。
-- Yahoo Finance の非公式APIを利用しているため、まれに取得失敗することがあります（その銘柄はスキップされログに記録されます）。
-- 「上がりそう/下がりそう」は将来予測ではなく、過去の値動き・出来高の機械的な要約です。
+- Yahoo Finance の非公式APIを利用しているため、まれに取得失敗することがあります（その銘柄はスキップされます）。
+- 「上がりそう/下がりそう」は将来予測ではなく、過去の値動き・出来高・ニュース見出しから機械的/AIが要約した参考情報です。
+- routinesのスケジュール最短間隔は1時間のため、日中の急変ニュース監視（15分おき）機能は廃止しました。

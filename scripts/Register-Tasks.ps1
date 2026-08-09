@@ -1,9 +1,10 @@
 ﻿# Register-Tasks.ps1
+# ★ローカルPCでの実行用（現在の主経路は claude.ai/code/routines + GitHub Actions、README.md参照）。
+# ANTHROPIC_API_KEYを自前で持っていて、ローカルPCでも実行したい場合のオプション手段として残してある。
 # ★ユーザー本人が手動で1回実行してください。
-# Windowsタスクスケジューラに以下3つのタスクを登録します:
+# Windowsタスクスケジューラに以下2つのタスクを登録します:
 #   1. Kabuzidou-MorningReport   : 平日 朝8:00 に Get-MorningReport.ps1 を実行
-#   2. Kabuzidou-NewsWatch       : 平日 8:30-15:30 の間、15分おきに Watch-News.ps1 を実行
-#   3. Kabuzidou-EveningReview   : 平日 17:13 に Get-EveningReview.ps1 を実行（朝レポートの答え合わせ）
+#   2. Kabuzidou-EveningReview   : 平日 17:13 に Get-EveningReview.ps1 を実行（朝レポートの答え合わせ）
 #
 # 実行方法:
 #   cd "C:\Users\reon2\OneDrive\デスクトップ\kabuzidou\scripts"
@@ -36,12 +37,7 @@ function Register-KabuTask {
 $morningTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "08:00"
 Register-KabuTask -TaskName "Kabuzidou-MorningReport" -ScriptPath (Join-Path $scriptsDir "Get-MorningReport.ps1") -Triggers $morningTrigger
 
-# --- タスク2: 日中ニュース監視（平日 8:30-15:30、15分間隔） ---
-$newsTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "08:30"
-$newsTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At "08:30" -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Hours 7)).Repetition
-Register-KabuTask -TaskName "Kabuzidou-NewsWatch" -ScriptPath (Join-Path $scriptsDir "Watch-News.ps1") -Triggers $newsTrigger
-
-# --- タスク3: 夕方の答え合わせ（平日 17:13、東証の大引け後） ---
+# --- タスク2: 夕方の答え合わせ（平日 17:13、東証の大引け後） ---
 $eveningTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "17:13"
 Register-KabuTask -TaskName "Kabuzidou-EveningReview" -ScriptPath (Join-Path $scriptsDir "Get-EveningReview.ps1") -Triggers $eveningTrigger
 
@@ -49,5 +45,4 @@ Write-Host ""
 Write-Host "登録済みタスクの確認: タスクスケジューラ (taskschd.msc) の「タスク スケジューラ ライブラリ」を開いてください。" -ForegroundColor Cyan
 Write-Host "手動でテスト実行するには:" -ForegroundColor Cyan
 Write-Host "  Start-ScheduledTask -TaskName 'Kabuzidou-MorningReport'"
-Write-Host "  Start-ScheduledTask -TaskName 'Kabuzidou-NewsWatch'"
 Write-Host "  Start-ScheduledTask -TaskName 'Kabuzidou-EveningReview'"

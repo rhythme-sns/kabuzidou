@@ -1,0 +1,43 @@
+name: Kabuzidou Send Outbox
+
+on:
+  # 分析・AI要約は claude.ai/code/routines のクラウドエージェント(Claude Pro契約内、API従量課金なし)が
+  # 担当し、結果を state/outbox/pending.json に書き込んでこのリポジトリにpushする。
+  # このワークフローはそのpushをトリガーに、中身をそのままSMTPでメール送信するだけの「発送係」。
+  # ANTHROPIC_API_KEYは不要(LLM呼び出しを一切行わない)。
+  push:
+    branches: [master]
+    paths:
+      - "state/outbox/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  send-outbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send outbox mail
+        shell: pwsh
+        env:
+          KABU_SMTP_USER: ${{ secrets.KABU_SMTP_USER }}
+          KABU_SMTP_PASS: ${{ secrets.KABU_SMTP_PASS }}
+        run: ./scripts/Send-Outbox.ps1
+
+      - name: Remove sent outbox file
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/outbox/
+          $changed = git status --porcelain
+          if ($changed) {
+            git commit -m "chore: clear sent outbox [skip ci]"
+            git pull --rebase
+            git push
+          } else {
+            Write-Host "No outbox changes to clear."
+          }
