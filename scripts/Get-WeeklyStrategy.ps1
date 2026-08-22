@@ -40,15 +40,25 @@ if ($auditHistory.Count -lt $minDays) {
 }
 
 # --- 監査官の日次因果分析を、日付ごとの的中/外れ件数と全体総括に要約する（プロンプトを軽量に保つため） ---
+# verdictByMaterialType: 根拠が何由来だったか（disclosure=TDnet適時開示、news=Google Newsの見出し、
+# chart_only=材料無しでチャートのみ）別に的中/外れを集計する。「材料の種類ごとに的中率が違う」という
+# 傾向は個別の因果分析の文章だけでは埋もれがちなため、定量的な軸として明示的にストラテジストへ渡す。
 $auditSummaryForPrompt = $auditHistory | ForEach-Object {
     $verdictCounts = [ordered]@{ "的中" = 0; "概ね妥当" = 0; "外れ" = 0; "判定不能" = 0 }
+    $verdictByMaterialType = [ordered]@{}
     foreach ($it in @($_.items)) {
         if ($it.verdict -and $verdictCounts.Contains($it.verdict)) { $verdictCounts[$it.verdict]++ }
+        $mt = if ($it.materialType) { $it.materialType } else { "unknown" }
+        if (-not $verdictByMaterialType.Contains($mt)) {
+            $verdictByMaterialType[$mt] = [ordered]@{ "的中" = 0; "概ね妥当" = 0; "外れ" = 0; "判定不能" = 0 }
+        }
+        if ($it.verdict -and $verdictByMaterialType[$mt].Contains($it.verdict)) { $verdictByMaterialType[$mt][$it.verdict]++ }
     }
     [PSCustomObject]@{
         date                  = $_.date
         itemCount             = $_.itemCount
         verdictCounts         = $verdictCounts
+        verdictByMaterialType = $verdictByMaterialType
         overallCausalSummary  = $_.overallCausalSummary
     }
 }
@@ -73,7 +83,11 @@ $systemPrompt = @"
 戦略コンサルタントが日々蓄積してきた反省点・負けパターンの記録（lessonsHistory）をもとに、
 個別銘柄の一時的な話ではなく、期間を通じて繰り返し観測される傾向に注目して、日本語で以下を生成してください。
 
-- winPatterns: 繰り返し的中に繋がっている「勝ちパターン」を配列で（根拠となった材料の傾向を具体的に。例:「出来高2倍以上かつニュース材料が伴う銘柄は的中率が高い」）
+各日のverdictByMaterialTypeは、根拠が何由来だったか（disclosure=TDnet適時開示由来、news=Google Newsの見出し由来、
+chart_only=材料なしチャートのみ）別の的中/外れ件数です。この軸別の傾向差（例:「適時開示由来の予測は的中率が高いが、
+チャートのみの予測は外れやすい」）にも必ず注目し、十分な件数が無い区分については無理に断定しないでください。
+
+- winPatterns: 繰り返し的中に繋がっている「勝ちパターン」を配列で（根拠となった材料の傾向を具体的に。例:「出来高2倍以上かつ適時開示が伴う銘柄は的中率が高い」）
 - losePatterns: 繰り返し外れに繋がっている「負けパターン」を配列で（同様に具体的に）
 - tradingCriteria: 今後の取引判断に使える具体的な基準（実行可能なルールの形で配列。例:「出来高1.5倍未満の銘柄は短期エントリー候補から除外する」）
 - summary: 全期間を通じた傾向の総括を2〜4文で

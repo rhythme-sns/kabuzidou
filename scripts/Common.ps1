@@ -205,6 +205,40 @@ function Get-KabuNewsReasonText {
     return [PSCustomObject]@{ Text = "「$($item.Title)」との報道"; Link = $item.Link }
 }
 
+function Get-KabuTdnetDisclosures {
+    # TDnet(適時開示情報閲覧サービス)を、yanoshin氏の非公式JSON API(APIキー不要)経由で企業コード別に取得する。
+    # 決算・業績予想修正・配当変更・業務提携などの一次情報で、Google Newsの記事化を待つと後追いになりがちな
+    # 「材料」の取りこぼしを補うために使う（監査官の分析で繰り返し指摘されていた検知漏れへの対処）。
+    param(
+        [Parameter(Mandatory)][string]$Ticker,
+        [int]$MaxItems = 3,
+        [int]$LookbackDays = 2
+    )
+    $code = $Ticker -replace '\.T$', ''
+    if ($code -notmatch '^[0-9A-Za-z]{4}$') { return @() }
+    $uri = "https://webapi.yanoshin.jp/webapi/tdnet/list/$code.json?limit=$MaxItems"
+    try {
+        $resp = Invoke-RestMethod -Uri $uri -TimeoutSec 15
+    } catch {
+        Write-KabuLog "適時開示取得失敗 ($Ticker): $($_.Exception.Message)" -Level "WARN"
+        return @()
+    }
+    $cutoff = (Get-KabuJstNow).AddDays(-$LookbackDays)
+    return @($resp.items) | Where-Object { $_ -and $_.Tdnet } | ForEach-Object { $_.Tdnet } |
+        Where-Object { $_.pubdate -and ([DateTime]$_.pubdate) -ge $cutoff } |
+        Select-Object -First $MaxItems |
+        ForEach-Object { [PSCustomObject]@{ Title = [string]$_.title; Link = [string]$_.document_url; PubDate = [string]$_.pubdate } }
+}
+
+function Get-KabuDisclosureReasonText {
+    # 直近(既定2日以内)のTDnet適時開示のうち最新1件を「根拠」の材料として取得する。無ければ$nullを返す。
+    param([Parameter(Mandatory)][string]$Ticker)
+    $items = Get-KabuTdnetDisclosures -Ticker $Ticker -MaxItems 1
+    if ($items.Count -eq 0) { return $null }
+    $item = $items[0]
+    return [PSCustomObject]@{ Text = "適時開示「$($item.Title)」"; Link = $item.Link }
+}
+
 function Get-KabuAnthropicApiKey {
     # GitHub Actions等CI環境では ANTHROPIC_API_KEY 環境変数（Secrets経由）を優先する。
     # ローカルPCでは、Setup-ClaudeApiKey.ps1 で保存した DPAPI 暗号化ファイルからAPIキーを復号して返す。

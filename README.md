@@ -26,7 +26,9 @@
 
 分析（LLM呼び出し）とメール送信（SMTP）を別の仕組みに分離することで、Claude Pro契約の範囲内・API従量課金なしで運用できるようにしています。
 
-1. **分析**: [claude.ai/code/routines](https://claude.ai/code/routines) に登録された3つのクラウドエージェント（上記の役割）が、スケジュール通りに起動 → Yahoo Financeの非公式チャートAPI・Google News RSS（いずれもAPIキー不要）から情報収集 → Claude自身の推論でリサーチ・分析 → 結果を `state/` 配下のJSONとメール本文（`state/outbox/pending.json`）に書き込み、リポジトリ（`rhythme-sns/kabuzidou`、masterブランチ）にpushします。ここではAnthropic APIキーへの課金は発生しません（Claude Proの利用枠内）。
+1. **分析**: [claude.ai/code/routines](https://claude.ai/code/routines) に登録された3つのクラウドエージェント（上記の役割）が、スケジュール通りに起動 → Yahoo Financeの非公式チャートAPI・TDnet適時開示情報（yanoshin氏の非公式JSON API）・Google News RSS（いずれもAPIキー不要）から情報収集 → Claude自身の推論でリサーチ・分析 → 結果を `state/` 配下のJSONとメール本文（`state/outbox/pending.json`）に書き込み、リポジトリ（`rhythme-sns/kabuzidou`、masterブランチ）にpushします。ここではAnthropic APIキーへの課金は発生しません（Claude Proの利用枠内）。
+   - 個別銘柄の「根拠」は、まずTDnet適時開示（決算・業績予想修正・配当変更・業務提携などの一次情報）を確認し、直近に開示が無ければGoogle Newsの見出しにフォールバックします。どちらが根拠になったか（`disclosure`/`news`/材料なし`chart_only`）は `materialType` として予測・答え合わせデータに記録され、週次ストラテジストが「材料の種類ごとの的中傾向」を定量的に分析する材料になります。
+   - 市場概況にはウォッチリストの中心であるAI/SaaS系グロース株の地合いに連動しやすいNasdaq総合指数(^IXIC)も含めています（日経平均・S&P500・ドル円に加えて）。
 2. **メール送信**: `state/outbox/**` へのpushをトリガーに GitHub Actions（`.github/workflows/send-outbox.yml`）が起動し、`pending.json` の中身をそのままGmail SMTP（アプリパスワード使用）で送信するだけの「発送係」です。LLM呼び出しは一切行わないため `ANTHROPIC_API_KEY` は不要です。送信後はoutboxファイルを削除してコミットします。
 3. **認証情報**: GitHub Actions実行時はリポジトリのSecrets（`KABU_SMTP_USER`/`KABU_SMTP_PASS`）のみで足ります。
 
@@ -89,6 +91,6 @@ routinesの画面から対象のルーティンを選び「Run now」で手動�
 
 ## 制限事項
 
-- Yahoo Finance の非公式APIを利用しているため、まれに取得失敗することがあります（その銘柄はスキップされます）。
+- Yahoo Finance・TDnet(yanoshin氏の非公式API)のいずれも非公式APIのため、まれに取得失敗することがあります（その銘柄はスキップ、またはニュースRSSへのフォールバックになります）。
 - 「上がりそう/下がりそう」は将来予測ではなく、過去の値動き・出来高・ニュース見出しから機械的/AIが要約した参考情報です。
 - routinesのスケジュール最短間隔は1時間のため、日中の急変ニュース監視（15分おき）機能は廃止しました。

@@ -70,6 +70,7 @@ foreach ($p in $snapshot.items) {
         AiSummary             = $p.aiSummary
         View                  = $p.view
         IsBuyCandidate        = [bool]$p.isBuyCandidate
+        MaterialType          = if ($p.materialType) { $p.materialType } else { "chart_only" }
     })
 }
 
@@ -173,6 +174,7 @@ if ($auditResult) {
                 aiExpectedMove  = if ($src) { $src.AiExpectedMove } else { "" }
                 aiConfidencePct = if ($src) { $src.AiConfidencePct } else { $null }
                 isBuyCandidate  = if ($src) { $src.IsBuyCandidate } else { $false }
+                materialType    = if ($src) { $src.MaterialType } else { "chart_only" }
                 verdict         = $auditItem.verdict
                 causalAnalysis  = $auditItem.causalAnalysis
             }

@@ -24,6 +24,8 @@ function Format-Pct($v) {
 $indices = @(
     @{ Ticker = "^N225";  Name = "日経平均" },
     @{ Ticker = "^GSPC";  Name = "S&P500(米)" },
+    # ウォッチリストはAI/SaaS系グロース株が中心で、値動きはS&P500よりもNasdaqの地合いに連動しやすいため追加。
+    @{ Ticker = "^IXIC";  Name = "Nasdaq総合(米)" },
     @{ Ticker = "JPY=X";  Name = "ドル円" }
 )
 $indexRows = foreach ($idx in $indices) {
@@ -94,7 +96,10 @@ $lgFallers = $largeResults | Sort-Object -Property ChangePct | Select-Object -Fi
 
 # --- 選出された銘柄にだけ「根拠」を付与する（全銘柄に付けるとニュース取得回数が多すぎるため） ---
 # 根拠 = (1)チャートの動き（前日比・5日トレンド・出来高）から機械的に導く説明
-#      + (2)関連ニュースの最新見出し（見つかった場合のみ）
+#      + (2)材料: まずTDnet適時開示（一次情報、決算・上方修正・提携等）を確認し、
+#              直近に開示が無ければGoogle Newsの見出しにフォールバックする。
+#              どちらが根拠になったかを MaterialType (disclosure/news/chart_only) としてタグ付けし、
+#              答え合わせ・週次ストラテジストでの的中率の傾向分析（材料の種類別）に使う。
 $newsReasonCache = @{}
 function Add-KabuReason($rows, [bool]$IsBuyCandidate = $false) {
     foreach ($r in $rows) {
@@ -105,14 +110,23 @@ function Add-KabuReason($rows, [bool]$IsBuyCandidate = $false) {
         $chartReason = Get-KabuChartReasonText -Momentum $momentum
 
         if (-not $newsReasonCache.ContainsKey($r.Name)) {
-            $newsReasonCache[$r.Name] = Get-KabuNewsReasonText -Query $r.Name
+            $disclosureReason = Get-KabuDisclosureReasonText -Ticker $r.Ticker
             Start-Sleep -Milliseconds 300
+            if ($disclosureReason) {
+                $newsReasonCache[$r.Name] = @{ Reason = $disclosureReason; MaterialType = "disclosure" }
+            } else {
+                $nr = Get-KabuNewsReasonText -Query $r.Name
+                Start-Sleep -Milliseconds 300
+                $newsReasonCache[$r.Name] = @{ Reason = $nr; MaterialType = $(if ($nr) { "news" } else { "chart_only" }) }
+            }
         }
-        $newsReason = $newsReasonCache[$r.Name]
+        $cached = $newsReasonCache[$r.Name]
+        $newsReason = $cached.Reason
 
         $reasonText = if ($newsReason) { "$chartReason。$($newsReason.Text)" } else { $chartReason }
         $r | Add-Member -MemberType NoteProperty -Name "Reason" -Value $reasonText -Force
         $r | Add-Member -MemberType NoteProperty -Name "ReasonLink" -Value $(if ($newsReason) { $newsReason.Link } else { $null }) -Force
+        $r | Add-Member -MemberType NoteProperty -Name "MaterialType" -Value $cached.MaterialType -Force
 
         $aiId = New-KabuAIItem -Items $aiItems -Name $r.Name -Context $reasonText -ChangePct $r.ChangePct -TrendPct5d $r.TrendPct5d -RangePct $r.RangePct -IsBuyCandidate $IsBuyCandidate
         $r | Add-Member -MemberType NoteProperty -Name "AIId" -Value $aiId -Force
@@ -204,7 +218,7 @@ if ($portfolio -and $portfolio.Count -gt 0) {
             Start-Sleep -Milliseconds 300
             if ($newsReason) { $view += "。$($newsReason.Text) <a href='$($newsReason.Link)' style='font-size:12px;'>[記事]</a>" }
             $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $estPct -TrendPct5d $estTrend -RangePct $m.RangePct
-            [PSCustomObject]@{ Name = $h.name; Ticker = $h.proxyName; Open = $m.LastOpen; High = $m.LastHigh; Low = $m.LastLow; LastClose = "(推定)"; ChangePct = $estPct; TrendPct5d = $estTrend; VolumeRatio = "-"; RangePct = $m.RangePct; View = $view; AIId = $aiId }
+            [PSCustomObject]@{ Name = $h.name; Ticker = $h.proxyName; Open = $m.LastOpen; High = $m.LastHigh; Low = $m.LastLow; LastClose = "(推定)"; ChangePct = $estPct; TrendPct5d = $estTrend; VolumeRatio = "-"; RangePct = $m.RangePct; View = $view; AIId = $aiId; MaterialType = $(if ($newsReason) { "news" } else { "chart_only" }) }
         } else {
             $c = Get-YahooChart -Ticker $h.ticker -Range "1mo" -Interval "1d"
             Start-Sleep -Milliseconds 300
@@ -216,11 +230,22 @@ if ($portfolio -and $portfolio.Count -gt 0) {
                     elseif ($m.VolumeRatio -gt 2) { "出来高急増、方向感の変化に注意" }
                     else { "目立った変化なし、様子見" }
             $view += "（" + (Get-KabuChartReasonText -Momentum $m) + "）"
-            $newsReason = Get-KabuNewsReasonText -Query $h.name
+            $disclosureReason = Get-KabuDisclosureReasonText -Ticker $h.ticker
             Start-Sleep -Milliseconds 300
-            if ($newsReason) { $view += "。$($newsReason.Text) <a href='$($newsReason.Link)' style='font-size:12px;'>[記事]</a>" }
+            $materialType = "chart_only"
+            if ($disclosureReason) {
+                $view += "。$($disclosureReason.Text) <a href='$($disclosureReason.Link)' style='font-size:12px;'>[開示]</a>"
+                $materialType = "disclosure"
+            } else {
+                $newsReason = Get-KabuNewsReasonText -Query $h.name
+                Start-Sleep -Milliseconds 300
+                if ($newsReason) {
+                    $view += "。$($newsReason.Text) <a href='$($newsReason.Link)' style='font-size:12px;'>[記事]</a>"
+                    $materialType = "news"
+                }
+            }
             $aiId = New-KabuAIItem -Items $aiItems -Name $h.name -Context $view -ChangePct $m.ChangePct -TrendPct5d $m.TrendPct5d -RangePct $m.RangePct
-            [PSCustomObject]@{ Name = $h.name; Ticker = $h.ticker; Open = $m.LastOpen; High = $m.LastHigh; Low = $m.LastLow; LastClose = $m.LastClose; ChangePct = $m.ChangePct; TrendPct5d = $m.TrendPct5d; VolumeRatio = $m.VolumeRatio; RangePct = $m.RangePct; View = $view; AIId = $aiId }
+            [PSCustomObject]@{ Name = $h.name; Ticker = $h.ticker; Open = $m.LastOpen; High = $m.LastHigh; Low = $m.LastLow; LastClose = $m.LastClose; ChangePct = $m.ChangePct; TrendPct5d = $m.TrendPct5d; VolumeRatio = $m.VolumeRatio; RangePct = $m.RangePct; View = $view; AIId = $aiId; MaterialType = $materialType }
         }
     }
     $portfolioRows = $rows
@@ -265,6 +290,7 @@ function Get-KabuPredictionItem($r, [string]$Section, [bool]$IsBuyCandidate = $f
         chartChangePct       = $r.ChangePct
         trendPct5d           = $r.TrendPct5d
         isBuyCandidate       = $IsBuyCandidate
+        materialType         = if ($r.MaterialType) { $r.MaterialType } else { "chart_only" }
         aiSummary            = if ($ai) { $ai.summary } else { "" }
         aiExpectedMove       = if ($ai) { $ai.expectedMove } else { "" }
         aiConfidencePct      = if ($ai) { $ai.confidencePct } else { $null }
@@ -292,6 +318,7 @@ foreach ($r in $portfolioRows) {
         trendPct5d           = $r.TrendPct5d
         isBuyCandidate       = $false
         view                 = $r.View
+        materialType         = if ($r.MaterialType) { $r.MaterialType } else { "chart_only" }
         aiSummary            = if ($ai) { $ai.summary } else { "" }
         aiExpectedMove       = if ($ai) { $ai.expectedMove } else { "" }
         aiConfidencePct      = if ($ai) { $ai.confidencePct } else { $null }
