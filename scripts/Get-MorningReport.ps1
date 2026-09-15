@@ -259,7 +259,13 @@ if ($portfolio -and $portfolio.Count -gt 0) {
 # ルールベースの内容のみで送信する。
 # lessonsContext: 過去の夕方answer合わせ(Get-EveningReview.ps1)で蓄積した的中率検証の教訓を
 # プロンプトに追加し、confidencePct等の見積もり精度を継続的に改善する。
+# playbookContext: state/playbook.json(Build-Playbook.ps1が全期間データから定量集計したtradingRules)を
+# 併せて渡すことで、日々の教訓の文章だけでなく統計的な裏付けのあるルールも反映させる。
 $lessonsContext = Get-KabuLessonsContext
+$playbookContext = Get-KabuPlaybookContext
+if ($playbookContext) {
+    $lessonsContext = if ($lessonsContext) { "$lessonsContext`n`n$playbookContext" } else { $playbookContext }
+}
 $aiInsights = @{}
 $aiInsightsFailed = $false
 if ($settings.enableAiInsights -and $aiItems.Count -gt 0) {

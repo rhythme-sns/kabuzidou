@@ -206,6 +206,7 @@ if ($auditResult -and $settings.enableAiInsights) {
         }
         $auditItemsJson = $auditItemsForPrompt | ConvertTo-Json -Depth 5 -Compress
         $recentLessonsContext = Get-KabuLessonsContext
+        $playbookContext = Get-KabuPlaybookContext
 
         $consultantSystemPrompt = @"
 あなたは日本の個人投資家向け株価予測システムの改善を担当する、戦略コンサルタントです。
@@ -217,6 +218,10 @@ if ($auditResult -and $settings.enableAiInsights) {
 
 【過去の教訓】
 $(if ($recentLessonsContext) { $recentLessonsContext } else { "(まだ蓄積なし)" })
+
+【全期間データの定量集計ルール(state/playbook.json、Build-Playbook.ps1で生成)】
+$(if ($playbookContext) { $playbookContext } else { "(まだ生成なし)" })
+これらは既に統計的に裏付けのある傾向なので、同じ指摘を繰り返すのではなく、本日新たに見えた・矛盾する点があれば優先的に指摘すること。
 "@
 
         $consultantSchema = @{

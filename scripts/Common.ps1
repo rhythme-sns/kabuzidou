@@ -506,6 +506,19 @@ function Get-KabuLessonsContext {
     return ($lines -join "`n")
 }
 
+function Get-KabuPlaybookContext {
+    # state/playbook.json(Build-Playbook.ps1が全期間データから定量集計したtradingRules)を
+    # AIプロンプトに埋め込みやすいテキストブロックに整形する。無ければ空文字を返す。
+    $path = Join-Path $script:StateDir "playbook.json"
+    if (-not (Test-Path $path)) { return "" }
+    $playbook = Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $playbook.tradingRules -or @($playbook.tradingRules).Count -eq 0) { return "" }
+    $lines = foreach ($r in $playbook.tradingRules) {
+        "- $($r.condition) → $($r.action)"
+    }
+    return "全期間$($playbook.auditDaysCount)日分・$($playbook.totalItems)件の定量集計(的中+概ね妥当率$($playbook.overallHitRatePct)%、$($playbook.generatedAt)時点)に基づくルール:`n" + ($lines -join "`n")
+}
+
 function Get-KabuMomentum {
     # 直近の終値の推移から単純なモメンタム指標を計算する。
     # あくまで過去の値動きを要約した「参考情報」であり、将来の値動きを保証するものではない。

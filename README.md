@@ -22,6 +22,14 @@
 3. **戦略コンサルタント**（同routineの後半、監査官と同じセッション内で連続実行）: 監査官の因果分析から本日の反省点・繰り返しの負けパターンを抽出し、次回以降のアナリストへの申し送りとして `state/lessons.json` に蓄積。ここまでの結果は夕方の答え合わせメール1通にまとめてoutboxに書き出す。
 4. **ストラテジスト**（`kabuzidou-weekly-strategy` routine、毎週末）: `state/audits/` と `state/lessons.json` の全期間データを俯瞰し、繰り返し現れる勝ちパターン・負けパターンを抽出して取引基準を作成（`state/strategy/日付.json` にも保存）。蓄積が `weeklyStrategyMinDays`（既定5日）分に満たない間は「データ蓄積中」の簡易メールのみ届きます。
 
+### Playbook（全期間データの定量集計）
+
+上記4役割はいずれもLLM（Claude）による文章ベースの傾向抽出ですが、`scripts/Build-Playbook.ps1` は `state/audits/` + `state/predictions/` の全件をLLMを介さず機械的に集計し、`state/playbook.json` に一本化します。区分（riser/faller/pullback/breakout）別・確信度帯別・トレンド幅（trendPct5d）帯別・材料種別（materialType）別・値動きの荒さ別・個別銘柄別の的中率を数値で算出し、`patterns`（発見事項）と `tradingRules`（機械的に適用できる条件・アクションの一覧）としてまとめます。
+
+- 生成/更新: `Get-WeeklyStrategy.ps1` の冒頭で自動実行されるため、週次ストラテジストが動くたびに最新化されます。手動で `scripts\Build-Playbook.ps1` を実行してもいつでも再集計できます。
+- 利用: `Common.ps1` の `Get-KabuPlaybookContext` が `tradingRules` を要約したテキストを返し、`Get-MorningReport.ps1`（予測時）と `Get-EveningReview.ps1`（答え合わせ時）の両方でAIプロンプトに追加され、`state/lessons.json` の日々の教訓と補完し合う形で使われます。
+- **注意**: これはローカルPowerShellスクリプト（「計算ロジックの仕様書」）側の実装です。主経路であるclaude.ai/code/routinesのクラウドエージェントに同様の定量集計を反映させたい場合は、各routineのシステムプロンプト側で `state/playbook.json` を読んで参照するよう、[claude.ai/code/routines](https://claude.ai/code/routines) の管理画面から個別に設定を追記する必要があります（このファイル自体はリポジトリにpushされるため、routineからは通常のファイル読み取りで参照可能です）。
+
 ## 仕組み（分析とメール送信を分離）
 
 分析（LLM呼び出し）とメール送信（SMTP）を別の仕組みに分離することで、Claude Pro契約の範囲内・API従量課金なしで運用できるようにしています。

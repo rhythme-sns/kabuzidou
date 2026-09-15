@@ -24,6 +24,16 @@ $auditHistory = Get-KabuAuditHistory
 $minDays = if ($settings.weeklyStrategyMinDays) { [int]$settings.weeklyStrategyMinDays } else { 5 }
 $todayIso = (Get-KabuJstNow).ToString("yyyy-MM-dd")
 
+# Build-Playbook.ps1: LLMを介さない決定的な集計で state/playbook.json を最新化する。
+# 週次ストラテジストの文章ベースの傾向抽出とは独立した、確信度帯・トレンド幅帯・個別銘柄別の定量的な裏付け。
+if ($auditHistory.Count -gt 0) {
+    try {
+        & "$PSScriptRoot\Build-Playbook.ps1"
+    } catch {
+        Write-KabuLog "Playbook再集計に失敗（週次レポート自体は継続）: $($_.Exception.Message)" -Level "WARN"
+    }
+}
+
 if ($auditHistory.Count -lt $minDays) {
     Write-KabuLog "監査データが$($auditHistory.Count)日分しかなく($minDays日未満)、パターン抽出には不十分なためスキップ"
     $jstNow = Get-KabuJstNow
